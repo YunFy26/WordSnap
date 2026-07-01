@@ -1,0 +1,593 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
+  color: #1c1c1e;
+  background: transparent;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+@keyframes wsspin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.float-root,
+.float-view {
+  width: 100%;
+  height: 100%;
+}
+
+.float-view {
+  padding: 0;
+}
+
+/* The card fills the window; the frosted look and rounded corners come from the
+   native macOS vibrancy material (see `windowEffects` in tauri.conf.json), so the
+   card itself stays transparent — no CSS background/border/shadow that would clash
+   with the native window or leave a coloured ring around it. */
+.float-card {
+  position: relative;
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 14px 16px 13px;
+  border: 0;
+  background: transparent;
+  color: #1c1c1e;
+  text-align: left;
+  appearance: none;
+}
+
+.float-card--error {
+  cursor: pointer;
+}
+
+.float-arrow {
+  display: none;
+}
+
+.float-word {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.18;
+  color: #1c1c1e;
+  letter-spacing: -0.01em;
+}
+
+.float-source {
+  font-size: 13.5px;
+  font-weight: 400;
+  line-height: 1.45;
+  color: #5a5a5e;
+}
+
+.float-translation {
+  margin-top: 9px;
+  font-size: 15.5px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: #2c2c2e;
+}
+
+.float-translation--sentence {
+  margin-top: 10px;
+  line-height: 1.55;
+  color: #1c1c1e;
+}
+
+.float-footer {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 0.5px solid rgba(0, 0, 0, 0.07);
+  font-size: 11.5px;
+  line-height: 1.2;
+  color: rgba(0, 0, 0, 0.4);
+}
+
+.float-footer--recorded {
+  font-weight: 500;
+  color: oklch(0.48 0.09 250);
+}
+
+.float-footer--muted {
+  display: block;
+}
+
+.record-mark,
+.error-dot {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  color: #fff;
+  line-height: 1;
+}
+
+.record-mark {
+  background: oklch(0.55 0.13 250);
+  font-size: 9px;
+}
+
+.skip-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border: 1.4px solid rgba(0, 0, 0, 0.22);
+  border-radius: 50%;
+}
+
+.skip-mark span {
+  width: 6px;
+  height: 1.4px;
+  border-radius: 1px;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.float-loading-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 11px;
+  font-size: 13.5px;
+  color: rgba(0, 0, 0, 0.42);
+}
+
+.spinner {
+  display: inline-block;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border: 2px solid rgba(0, 0, 0, 0.12);
+  border-top-color: oklch(0.55 0.13 250);
+  border-radius: 50%;
+  animation: wsspin 0.7s linear infinite;
+}
+
+.float-error-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: #c0392b;
+}
+
+.float-error-row span:last-child {
+  flex: 1;
+}
+
+.error-dot {
+  margin-top: 1px;
+  background: #e0483d;
+  font-size: 10px;
+}
+
+.window-root {
+  width: 100%;
+  height: 100%;
+}
+
+/* Frost + colour come from the native macOS vibrancy material (see the
+   `popover` windowEffects in tauri.conf.json). Keep only a light translucent
+   wash on top so the content stays readable while the desktop still shows
+   through, exactly like Control Center. */
+#app.window-root {
+  background: rgba(250, 250, 252, 0.45);
+}
+
+body[data-view="words"] #app,
+body[data-view="settings"] #app {
+  width: 100%;
+  height: 100%;
+}
+
+body[data-view="float"] #app {
+  width: 100%;
+  height: 100%;
+}
+
+body[data-view="menu"] #app {
+  width: 228px;
+  height: 166px;
+}
+
+.win-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 38px;
+  flex: none;
+  color: #1c1c1e;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+.words-window {
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  width: 100%;
+  height: 100%;
+  color: #1c1c1e;
+}
+
+.words-head,
+.word-row {
+  display: grid;
+  grid-template-columns: 1fr 1.35fr 34px 62px;
+  align-items: center;
+}
+
+.words-head {
+  padding: 9px 16px 6px;
+  font: 600 10.5px/1 ui-monospace, Menlo, monospace;
+  color: rgba(0, 0, 0, 0.34);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.words-head span:nth-child(3),
+.words-head span:nth-child(4) {
+  text-align: right;
+}
+
+.word-rows {
+  min-height: 0;
+  padding: 0 8px 8px;
+  overflow: hidden auto;
+}
+
+.word-row {
+  min-height: 32px;
+  padding: 8px;
+  border-radius: 7px;
+}
+
+.word-row.is-selected {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.word-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.word-row span:nth-child(1) {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: #1c1c1e;
+}
+
+.word-row span:nth-child(2) {
+  font-size: 13px;
+  color: #3a3a3c;
+}
+
+.word-row span:nth-child(3) {
+  text-align: right;
+  font: 500 12px/1 ui-monospace, Menlo, monospace;
+  color: rgba(0, 0, 0, 0.5);
+}
+
+.word-row span:nth-child(4) {
+  text-align: right;
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.4);
+}
+
+.words-stat {
+  padding: 9px 16px;
+  border-top: 0.5px solid rgba(0, 0, 0, 0.06);
+  font-size: 11.5px;
+  color: rgba(0, 0, 0, 0.4);
+}
+
+.settings-window {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+}
+
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  padding: 14px 18px 18px;
+  overflow: hidden auto;
+}
+
+.group-caption {
+  margin: 0 0 7px 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.42);
+  letter-spacing: 0.01em;
+}
+
+.group-caption:not(:first-child) {
+  margin-top: 16px;
+}
+
+.settings-group {
+  overflow: hidden;
+  border: 0.5px solid rgba(0, 0, 0, 0.08);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 41px;
+  padding: 11px 13px;
+  border-bottom: 0.5px solid rgba(0, 0, 0, 0.06);
+  gap: 12px;
+}
+
+.settings-row:last-child {
+  border-bottom: 0;
+}
+
+.settings-row > span:first-child {
+  flex: none;
+  font-size: 13.5px;
+  color: #1c1c1e;
+}
+
+.settings-row input,
+.settings-row select {
+  min-width: 0;
+  max-width: 190px;
+  border: 0;
+  outline: 0;
+  color: #3a3a3c;
+  text-align: right;
+  background: transparent;
+}
+
+.settings-row input::placeholder {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.settings-row input:focus::placeholder {
+  color: rgba(0, 0, 0, 0.28);
+}
+
+.field-stack {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.field-stack input {
+  width: 100%;
+  max-width: 100%;
+}
+
+.field-stack small {
+  width: 100%;
+  max-width: 100%;
+  color: rgba(0, 0, 0, 0.42);
+  font-size: 10.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.select-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.select-wrap::after {
+  content: "";
+  position: absolute;
+  right: 9px;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid rgba(0, 0, 0, 0.4);
+  border-bottom: 1.5px solid rgba(0, 0, 0, 0.4);
+  transform: translateY(-2px) rotate(45deg);
+  pointer-events: none;
+}
+
+.settings-row select {
+  appearance: none;
+  max-width: 190px;
+  padding: 3px 24px 3px 9px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.05);
+  font-size: 13px;
+  text-align: left;
+  cursor: default;
+}
+
+.settings-row select:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.mono-input {
+  font: 12px/1 ui-monospace, Menlo, monospace;
+}
+
+.model-input {
+  width: 190px;
+  padding: 3px 0;
+  text-align: left;
+}
+
+.kbd-pair {
+  display: inline-flex;
+  gap: 4px;
+}
+
+kbd {
+  min-width: 25px;
+  padding: 2px 7px;
+  border: 0.5px solid rgba(0, 0, 0, 0.15);
+  border-bottom-width: 1.5px;
+  border-radius: 5px;
+  background: #fff;
+  color: #1c1c1e;
+  font: 600 11px/1.2 ui-monospace, Menlo, monospace;
+  text-align: center;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.primary-button {
+  border: 0;
+  border-radius: 7px;
+  padding: 6px 16px;
+  background: oklch(0.55 0.13 250);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.menu-root {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+}
+
+.tray-menu {
+  width: 228px;
+  height: 166px;
+  padding: 5px;
+  border: 0.5px solid rgba(0, 0, 0, 0.08);
+  border-radius: 9px;
+  background: rgba(246, 246, 248, 0.72);
+  box-shadow: 0 18px 46px -10px rgba(15, 18, 28, 0.4);
+  -webkit-backdrop-filter: blur(40px) saturate(1.8);
+  backdrop-filter: blur(40px) saturate(1.8);
+}
+
+.tray-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px 8px;
+}
+
+.brand-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: linear-gradient(160deg, oklch(0.62 0.13 250), oklch(0.49 0.13 255));
+}
+
+.brand-icon span {
+  width: 9px;
+  height: 2px;
+  border-radius: 1px;
+  background: #fff;
+  box-shadow: 0 3px 0 rgba(255, 255, 255, 0.6);
+}
+
+.tray-title {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.tray-title strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tray-title small {
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.42);
+}
+
+.menu-separator {
+  height: 0.5px;
+  margin: 4px 2px;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 28px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #1c1c1e;
+  font-size: 13px;
+  text-align: left;
+}
+
+.menu-item span:last-child {
+  color: rgba(0, 0, 0, 0.4);
+  font-size: 12px;
+}
+
+.menu-item:hover,
+.menu-item:focus-visible {
+  background: oklch(0.55 0.13 250);
+  color: #fff;
+  outline: none;
+}
+
+.menu-item:hover span:last-child,
+.menu-item:focus-visible span:last-child {
+  color: rgba(255, 255, 255, 0.75);
+}

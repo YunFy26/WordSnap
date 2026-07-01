@@ -1,0 +1,9 @@
+.DS_Store
+.claude/
+.env
+.env.*
+*.log
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/schemas/

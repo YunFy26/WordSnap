@@ -842,9 +842,58 @@ fn toggle_menu_window(app: &AppHandle, tray_x: i32, tray_y: i32) {
             return;
         }
 
-        let x = tray_x.saturating_sub(196);
-        let y = tray_y.saturating_add(24);
-        let _ = window.set_position(PhysicalPosition::new(x, y));
+        let scale_factor = window.scale_factor().unwrap_or(1.0);
+
+        // Find the monitor containing the tray icon click position
+        let monitor = if let Ok(monitors) = window.available_monitors() {
+            monitors.into_iter().find(|m| {
+                let pos = m.position();
+                let size = m.size();
+                tray_x >= pos.x && tray_x < pos.x + size.width as i32 &&
+                tray_y >= pos.y && tray_y < pos.y + size.height as i32
+            })
+        } else {
+            None
+        }.or_else(|| {
+            window.current_monitor().ok().flatten()
+        }).or_else(|| {
+            window.primary_monitor().ok().flatten()
+        });
+
+        if let Some(monitor) = monitor {
+            let work_area = monitor.work_area();
+            let window_size = window.outer_size().unwrap_or_default();
+            let w = window_size.width as i32;
+            let h = window_size.height as i32;
+
+            // Compute horizontal position: align window right edge near the tray icon,
+            // scaling the offset by DPI.
+            let right_offset = (32.0 * scale_factor) as i32;
+            let mut x = tray_x - w + right_offset;
+
+            // Determine if the taskbar is at the top or bottom of the screen.
+            let monitor_center_y = work_area.position.y + (work_area.size.height as i32) / 2;
+            let gap = (8.0 * scale_factor) as i32;
+            let mut y = if tray_y > monitor_center_y {
+                // Taskbar is near the bottom: pop the window above the tray icon
+                tray_y - h - gap
+            } else {
+                // Taskbar is near the top: drop the window below the tray icon
+                tray_y + gap
+            };
+
+            // Clamp both coordinates to ensure the entire window stays within the work area.
+            x = x.clamp(work_area.position.x, work_area.position.x + work_area.size.width as i32 - w);
+            y = y.clamp(work_area.position.y, work_area.position.y + work_area.size.height as i32 - h);
+
+            let _ = window.set_position(PhysicalPosition::new(x, y));
+        } else {
+            // Fallback to legacy static offsets if monitor info is unavailable.
+            let x = tray_x.saturating_sub(196);
+            let y = tray_y.saturating_add(24);
+            let _ = window.set_position(PhysicalPosition::new(x, y));
+        }
+
         let _ = window.show();
         let _ = window.set_focus();
     }

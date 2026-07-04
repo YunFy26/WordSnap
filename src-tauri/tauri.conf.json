@@ -82,7 +82,7 @@
         "resizable": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "shadow": false,
+        "shadow": true,
         "windowEffects": {
           "effects": ["menu", "blur"],
           "state": "active",

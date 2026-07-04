@@ -72,9 +72,63 @@ jobs:
           tagName: wordsnap-v__VERSION__-build-${{ github.run_number }}
           releaseName: WordSnap v__VERSION__ build ${{ github.run_number }}
           releaseBody: |
-            Automated WordSnap release from commit ${{ github.sha }}.
+            自动发布，来自提交 ${{ github.sha }}。
 
-            Download the asset that matches your platform below.
+            请按平台选择下载，推荐使用「免安装 / 绿色版」：
+
+            - macOS (Apple Silicon) 免安装：`WordSnap_<版本>_macos-aarch64_portable.zip`
+            - macOS (Intel) 免安装：`WordSnap_<版本>_macos-x64_portable.zip`
+              解压后直接双击 `WordSnap.app` 即可。首次打开若被 Gatekeeper 拦截（应用未签名），请右键点击 App → 选择「打开」，或在终端执行 `xattr -cr WordSnap.app` 后再打开。
+            - Windows 绿色版：`WordSnap_<版本>_windows-x64_portable.zip`
+              解压即用，双击 `WordSnap.exe`。需要系统自带的 WebView2 运行时（Win10/11 一般已内置）。
+            - Linux 免安装：`*.AppImage`
+              下载后执行 `chmod +x WordSnap_*.AppImage`，然后直接运行。
+
+            偏好安装包的用户，也可以下载对应的 `.dmg` / `.msi` / `.exe (NSIS)` / `.deb` 安装器。
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Package portable macOS app (Apple Silicon)
+        if: matrix.platform == 'macos-latest' && contains(matrix.args, 'aarch64-apple-darwin')
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          TAG="wordsnap-v${VERSION}-build-${{ github.run_number }}"
+          APP_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/WordSnap.app"
+          ZIP_NAME="WordSnap_${VERSION}_macos-aarch64_portable.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_NAME"
+          gh release upload "$TAG" "$ZIP_NAME" --clobber
+
+      - name: Package portable macOS app (Intel)
+        if: matrix.platform == 'macos-latest' && contains(matrix.args, 'x86_64-apple-darwin')
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          TAG="wordsnap-v${VERSION}-build-${{ github.run_number }}"
+          APP_PATH="src-tauri/target/x86_64-apple-darwin/release/bundle/macos/WordSnap.app"
+          ZIP_NAME="WordSnap_${VERSION}_macos-x64_portable.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_NAME"
+          gh release upload "$TAG" "$ZIP_NAME" --clobber
+
+      - name: Package portable Windows app
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = node -p "require('./src-tauri/tauri.conf.json').version"
+          $tag = "wordsnap-v$version-build-${{ github.run_number }}"
+          $releaseDir = "src-tauri/target/release"
+          $exe = Get-ChildItem -Path $releaseDir -Filter *.exe -File |
+            Where-Object { $_.Name -notlike '*setup*' -and $_.Name -notlike '*installer*' } |
+            Select-Object -First 1
+          if (-not $exe) { throw "No portable exe found in $releaseDir" }
+          Write-Host "Found portable exe: $($exe.FullName)"
+          $zipName = "WordSnap_${version}_windows-x64_portable.zip"
+          Compress-Archive -Path $exe.FullName -DestinationPath $zipName -Force
+          gh release upload $tag $zipName --clobber

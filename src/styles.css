@@ -1,10 +1,57 @@
+/* ---------------------------------------------------------------------------
+   Design tokens. Light values live on :root, dark values in the media query,
+   so every view (float / words / settings / menu) follows the system theme —
+   on macOS the native vibrancy material flips with it automatically.
+--------------------------------------------------------------------------- */
 :root {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
-  color: #1c1c1e;
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Segoe UI", "Microsoft YaHei UI", "Noto Sans CJK SC", system-ui, sans-serif;
+  color: var(--text-1);
   background: transparent;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+
+  --accent: #007aff;
+  --danger: #d70015;
+  --danger-badge: #e0483d;
+  --text-1: rgba(0, 0, 0, 0.88);
+  --text-2: rgba(0, 0, 0, 0.6);
+  --text-3: rgba(0, 0, 0, 0.42);
+  --separator: rgba(0, 0, 0, 0.08);
+  --separator-weak: rgba(0, 0, 0, 0.06);
+  --control-bg: rgba(0, 0, 0, 0.05);
+  --control-bg-hover: rgba(0, 0, 0, 0.09);
+  --row-selected: rgba(0, 0, 0, 0.04);
+  --wash: rgba(250, 250, 252, 0.45);
+  --group-bg: rgba(255, 255, 255, 0.55);
+  --menu-wash: rgba(246, 246, 248, 0.55);
+  --surface: #fafafc;
+  --surface-raised: #ffffff;
+  --kbd-bg: rgba(255, 255, 255, 0.9);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent: #0a84ff;
+    --danger: #ff6961;
+    --danger-badge: #ff453a;
+    --text-1: rgba(255, 255, 255, 0.92);
+    --text-2: rgba(255, 255, 255, 0.62);
+    --text-3: rgba(255, 255, 255, 0.45);
+    --separator: rgba(255, 255, 255, 0.12);
+    --separator-weak: rgba(255, 255, 255, 0.09);
+    --control-bg: rgba(255, 255, 255, 0.08);
+    --control-bg-hover: rgba(255, 255, 255, 0.14);
+    --row-selected: rgba(255, 255, 255, 0.06);
+    --wash: rgba(32, 32, 36, 0.35);
+    --group-bg: rgba(255, 255, 255, 0.07);
+    --menu-wash: rgba(44, 44, 48, 0.55);
+    --surface: #202024;
+    --surface-raised: #2b2b2f;
+    --kbd-bg: rgba(255, 255, 255, 0.12);
+  }
 }
 
 * {
@@ -25,6 +72,7 @@ button,
 input,
 select {
   font: inherit;
+  color: inherit;
 }
 
 @keyframes wsspin {
@@ -33,6 +81,9 @@ select {
   }
 }
 
+/* ---------------------------------------------------------------------------
+   Float (translation popup)
+--------------------------------------------------------------------------- */
 .float-root,
 .float-view {
   width: 100%;
@@ -43,19 +94,21 @@ select {
   padding: 0;
 }
 
-/* The card fills the window; the frosted look and rounded corners come from the
-   native macOS vibrancy material (see `windowEffects` in tauri.conf.json), so the
-   card itself stays transparent — no CSS background/border/shadow that would clash
-   with the native window or leave a coloured ring around it. */
+/* On macOS the frosted look and rounded corners come from the native vibrancy
+   material (`windowEffects` in tauri.conf.json), so the card stays transparent.
+   Windows/Linux get no native material — there the card paints its own solid
+   surface, border and radius (see the non-mac overrides at the bottom). */
 .float-card {
   position: relative;
-  display: block;
+  display: flex;
+  flex-direction: column;
   width: 100%;
+  max-height: 100%;
   margin: 0;
   padding: 14px 16px 13px;
   border: 0;
   background: transparent;
-  color: #1c1c1e;
+  color: var(--text-1);
   text-align: left;
   appearance: none;
 }
@@ -64,23 +117,42 @@ select {
   cursor: pointer;
 }
 
-.float-arrow {
-  display: none;
-}
-
 .float-word {
+  flex: none;
   font-size: 17px;
   font-weight: 600;
   line-height: 1.18;
-  color: #1c1c1e;
+  color: var(--text-1);
   letter-spacing: -0.01em;
+}
+
+/* Long originals (e.g. a whole sentence while loading) stay compact. */
+.float-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+/* Scrollable body of the card. The window height is capped by the backend, so
+   overly long translations scroll here — with the scrollbar fully hidden. */
+.float-scroll {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.float-scroll::-webkit-scrollbar {
+  display: none;
 }
 
 .float-source {
   font-size: 13.5px;
   font-weight: 400;
   line-height: 1.45;
-  color: #5a5a5e;
+  color: var(--text-2);
 }
 
 .float-translation {
@@ -88,30 +160,30 @@ select {
   font-size: 15.5px;
   font-weight: 400;
   line-height: 1.5;
-  color: #2c2c2e;
+  color: var(--text-1);
 }
 
 .float-translation--sentence {
   margin-top: 10px;
   line-height: 1.55;
-  color: #1c1c1e;
 }
 
 .float-footer {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 7px;
   margin-top: 12px;
   padding-top: 11px;
-  border-top: 0.5px solid rgba(0, 0, 0, 0.07);
+  border-top: 0.5px solid var(--separator-weak);
   font-size: 11.5px;
   line-height: 1.2;
-  color: rgba(0, 0, 0, 0.4);
+  color: var(--text-3);
 }
 
 .float-footer--recorded {
   font-weight: 500;
-  color: oklch(0.48 0.09 250);
+  color: var(--accent);
 }
 
 .float-footer--muted {
@@ -132,7 +204,7 @@ select {
 }
 
 .record-mark {
-  background: oklch(0.55 0.13 250);
+  background: var(--accent);
   font-size: 9px;
 }
 
@@ -143,7 +215,7 @@ select {
   justify-content: center;
   width: 15px;
   height: 15px;
-  border: 1.4px solid rgba(0, 0, 0, 0.22);
+  border: 1.4px solid var(--text-3);
   border-radius: 50%;
 }
 
@@ -151,16 +223,17 @@ select {
   width: 6px;
   height: 1.4px;
   border-radius: 1px;
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--text-3);
 }
 
 .float-loading-row {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 9px;
   margin-top: 11px;
   font-size: 13.5px;
-  color: rgba(0, 0, 0, 0.42);
+  color: var(--text-3);
 }
 
 .spinner {
@@ -168,8 +241,8 @@ select {
   flex: none;
   width: 15px;
   height: 15px;
-  border: 2px solid rgba(0, 0, 0, 0.12);
-  border-top-color: oklch(0.55 0.13 250);
+  border: 2px solid var(--separator);
+  border-top-color: var(--accent);
   border-radius: 50%;
   animation: wsspin 0.7s linear infinite;
 }
@@ -181,7 +254,7 @@ select {
   margin-top: 10px;
   font-size: 13.5px;
   line-height: 1.45;
-  color: #c0392b;
+  color: var(--danger);
 }
 
 .float-error-row span:last-child {
@@ -190,29 +263,27 @@ select {
 
 .error-dot {
   margin-top: 1px;
-  background: #e0483d;
+  background: var(--danger-badge);
   font-size: 10px;
 }
 
+/* ---------------------------------------------------------------------------
+   Shared window chrome (words / settings)
+--------------------------------------------------------------------------- */
 .window-root {
   width: 100%;
   height: 100%;
 }
 
-/* Frost + colour come from the native macOS vibrancy material (see the
-   `popover` windowEffects in tauri.conf.json). Keep only a light translucent
-   wash on top so the content stays readable while the desktop still shows
-   through, exactly like Control Center. */
+/* Frost + colour come from the native macOS vibrancy material; keep only a
+   light translucent wash so content stays readable while the desktop shows
+   through, like Control Center. Non-mac windows get a solid surface below. */
 #app.window-root {
-  background: rgba(250, 250, 252, 0.45);
+  background: var(--wash);
 }
 
 body[data-view="words"] #app,
-body[data-view="settings"] #app {
-  width: 100%;
-  height: 100%;
-}
-
+body[data-view="settings"] #app,
 body[data-view="float"] #app {
   width: 100%;
   height: 100%;
@@ -229,7 +300,7 @@ body[data-view="menu"] #app {
   justify-content: center;
   height: 38px;
   flex: none;
-  color: #1c1c1e;
+  color: var(--text-1);
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.01em;
@@ -238,12 +309,15 @@ body[data-view="menu"] #app {
   cursor: default;
 }
 
+/* ---------------------------------------------------------------------------
+   Words window
+--------------------------------------------------------------------------- */
 .words-window {
   display: grid;
   grid-template-rows: auto auto 1fr auto;
   width: 100%;
   height: 100%;
-  color: #1c1c1e;
+  color: var(--text-1);
 }
 
 .words-head,
@@ -255,8 +329,8 @@ body[data-view="menu"] #app {
 
 .words-head {
   padding: 9px 16px 6px;
-  font: 600 10.5px/1 ui-monospace, Menlo, monospace;
-  color: rgba(0, 0, 0, 0.34);
+  font: 600 10.5px/1 ui-monospace, Menlo, Consolas, monospace;
+  color: var(--text-3);
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
@@ -278,8 +352,9 @@ body[data-view="menu"] #app {
   border-radius: 7px;
 }
 
+.word-row:hover,
 .word-row.is-selected {
-  background: rgba(0, 0, 0, 0.03);
+  background: var(--row-selected);
 }
 
 .word-row span {
@@ -292,33 +367,36 @@ body[data-view="menu"] #app {
 .word-row span:nth-child(1) {
   font-size: 13.5px;
   font-weight: 500;
-  color: #1c1c1e;
+  color: var(--text-1);
 }
 
 .word-row span:nth-child(2) {
   font-size: 13px;
-  color: #3a3a3c;
+  color: var(--text-2);
 }
 
 .word-row span:nth-child(3) {
   text-align: right;
-  font: 500 12px/1 ui-monospace, Menlo, monospace;
-  color: rgba(0, 0, 0, 0.5);
+  font: 500 12px/1 ui-monospace, Menlo, Consolas, monospace;
+  color: var(--text-2);
 }
 
 .word-row span:nth-child(4) {
   text-align: right;
   font-size: 11px;
-  color: rgba(0, 0, 0, 0.4);
+  color: var(--text-3);
 }
 
 .words-stat {
   padding: 9px 16px;
-  border-top: 0.5px solid rgba(0, 0, 0, 0.06);
+  border-top: 0.5px solid var(--separator-weak);
   font-size: 11.5px;
-  color: rgba(0, 0, 0, 0.4);
+  color: var(--text-3);
 }
 
+/* ---------------------------------------------------------------------------
+   Settings window
+--------------------------------------------------------------------------- */
 .settings-window {
   display: flex;
   flex-direction: column;
@@ -338,7 +416,7 @@ body[data-view="menu"] #app {
   margin: 0 0 7px 3px;
   font-size: 11px;
   font-weight: 600;
-  color: rgba(0, 0, 0, 0.42);
+  color: var(--text-3);
   letter-spacing: 0.01em;
 }
 
@@ -348,9 +426,9 @@ body[data-view="menu"] #app {
 
 .settings-group {
   overflow: hidden;
-  border: 0.5px solid rgba(0, 0, 0, 0.08);
+  border: 0.5px solid var(--separator);
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.55);
+  background: var(--group-bg);
 }
 
 .settings-row {
@@ -359,7 +437,7 @@ body[data-view="menu"] #app {
   justify-content: space-between;
   min-height: 41px;
   padding: 11px 13px;
-  border-bottom: 0.5px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 0.5px solid var(--separator-weak);
   gap: 12px;
 }
 
@@ -370,7 +448,7 @@ body[data-view="menu"] #app {
 .settings-row > span:first-child {
   flex: none;
   font-size: 13.5px;
-  color: #1c1c1e;
+  color: var(--text-1);
 }
 
 .settings-row input,
@@ -379,17 +457,21 @@ body[data-view="menu"] #app {
   max-width: 190px;
   border: 0;
   outline: 0;
-  color: #3a3a3c;
+  color: var(--text-2);
   text-align: right;
   background: transparent;
 }
 
+.settings-row input:focus {
+  color: var(--text-1);
+}
+
 .settings-row input::placeholder {
-  color: rgba(0, 0, 0, 0.45);
+  color: var(--text-3);
 }
 
 .settings-row input:focus::placeholder {
-  color: rgba(0, 0, 0, 0.28);
+  opacity: 0.6;
 }
 
 .field-stack {
@@ -410,7 +492,7 @@ body[data-view="menu"] #app {
 .field-stack small {
   width: 100%;
   max-width: 100%;
-  color: rgba(0, 0, 0, 0.42);
+  color: var(--text-3);
   font-size: 10.5px;
   line-height: 1.35;
   overflow-wrap: anywhere;
@@ -423,35 +505,42 @@ body[data-view="menu"] #app {
   align-items: center;
 }
 
+/* macOS pop-up button: accent square with white up/down chevrons. */
 .select-wrap::after {
   content: "";
   position: absolute;
-  right: 9px;
-  width: 6px;
-  height: 6px;
-  border-right: 1.5px solid rgba(0, 0, 0, 0.4);
-  border-bottom: 1.5px solid rgba(0, 0, 0, 0.4);
-  transform: translateY(-2px) rotate(45deg);
+  top: 50%;
+  right: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  transform: translateY(-50%);
+  background-color: var(--accent);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 14'%3E%3Cpath d='M2 5.2 5 2.2l3 3M2 8.8l3 3 3-3' fill='none' stroke='%23fff' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 8px 12px;
   pointer-events: none;
 }
 
 .settings-row select {
   appearance: none;
   max-width: 190px;
-  padding: 3px 24px 3px 9px;
+  padding: 3px 26px 3px 9px;
   border-radius: 6px;
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--control-bg);
   font-size: 13px;
   text-align: left;
+  color: var(--text-1);
   cursor: default;
 }
 
 .settings-row select:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--control-bg-hover);
 }
 
 .mono-input {
-  font: 12px/1 ui-monospace, Menlo, monospace;
+  font: 12px/1 ui-monospace, Menlo, Consolas, monospace;
 }
 
 .model-input {
@@ -468,12 +557,12 @@ body[data-view="menu"] #app {
 kbd {
   min-width: 25px;
   padding: 2px 7px;
-  border: 0.5px solid rgba(0, 0, 0, 0.15);
+  border: 0.5px solid var(--separator);
   border-bottom-width: 1.5px;
   border-radius: 5px;
-  background: #fff;
-  color: #1c1c1e;
-  font: 600 11px/1.2 ui-monospace, Menlo, monospace;
+  background: var(--kbd-bg);
+  color: var(--text-1);
+  font: 600 11px/1.2 ui-monospace, Menlo, Consolas, monospace;
   text-align: center;
 }
 
@@ -487,29 +576,40 @@ kbd {
   border: 0;
   border-radius: 7px;
   padding: 6px 16px;
-  background: oklch(0.55 0.13 250);
+  background-color: var(--accent);
+  background-image: linear-gradient(rgba(255, 255, 255, 0.17), rgba(255, 255, 255, 0));
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
   color: #fff;
   font-size: 13px;
   font-weight: 500;
 }
 
+.primary-button:active {
+  filter: brightness(0.88);
+}
+
+.primary-button:disabled {
+  opacity: 0.6;
+}
+
+/* ---------------------------------------------------------------------------
+   Tray menu popup
+--------------------------------------------------------------------------- */
 .menu-root {
   width: 100%;
   height: 100%;
   padding: 0;
 }
 
+/* Frost comes from the native `menu`/`blur` window effect on macOS; the CSS
+   wash only tunes contrast. Non-mac gets a solid raised surface below. */
 .tray-menu {
   width: 228px;
   height: 166px;
   padding: 5px;
-  border: 0.5px solid rgba(0, 0, 0, 0.08);
+  border: 0.5px solid var(--separator);
   border-radius: 9px;
-  background: rgba(246, 246, 248, 0.72);
-  box-shadow: 0 18px 46px -10px rgba(15, 18, 28, 0.4);
-  -webkit-backdrop-filter: blur(40px) saturate(1.8);
-  backdrop-filter: blur(40px) saturate(1.8);
+  background: var(--menu-wash);
 }
 
 .tray-head {
@@ -517,6 +617,8 @@ kbd {
   align-items: center;
   gap: 8px;
   padding: 7px 9px 8px;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .brand-icon {
@@ -527,7 +629,7 @@ kbd {
   width: 20px;
   height: 20px;
   border-radius: 6px;
-  background: linear-gradient(160deg, oklch(0.62 0.13 250), oklch(0.49 0.13 255));
+  background: linear-gradient(160deg, #4ba1ff, #0a63d8);
 }
 
 .brand-icon span {
@@ -547,17 +649,18 @@ kbd {
 .tray-title strong {
   font-size: 13px;
   font-weight: 600;
+  color: var(--text-1);
 }
 
 .tray-title small {
   font-size: 11px;
-  color: rgba(0, 0, 0, 0.42);
+  color: var(--text-3);
 }
 
 .menu-separator {
   height: 0.5px;
-  margin: 4px 2px;
-  background: rgba(0, 0, 0, 0.08);
+  margin: 4px 10px;
+  background: var(--separator);
 }
 
 .menu-item {
@@ -570,19 +673,19 @@ kbd {
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #1c1c1e;
+  color: var(--text-1);
   font-size: 13px;
   text-align: left;
 }
 
 .menu-item span:last-child {
-  color: rgba(0, 0, 0, 0.4);
+  color: var(--text-3);
   font-size: 12px;
 }
 
 .menu-item:hover,
 .menu-item:focus-visible {
-  background: oklch(0.55 0.13 250);
+  background: var(--accent);
   color: #fff;
   outline: none;
 }
@@ -590,4 +693,61 @@ kbd {
 .menu-item:hover span:last-child,
 .menu-item:focus-visible span:last-child {
   color: rgba(255, 255, 255, 0.75);
+}
+
+/* ---------------------------------------------------------------------------
+   Non-mac (Windows / Linux) adaptations. There is no native vibrancy, rounded
+   window corners, or overlay titlebar there, so windows paint solid surfaces,
+   floating panels draw their own radius + border, and the fake macOS titlebar
+   is dropped in favour of the real system one.
+--------------------------------------------------------------------------- */
+body:not(.is-macos) #app.window-root {
+  background: var(--surface);
+}
+
+body:not(.is-macos) .win-titlebar {
+  display: none;
+}
+
+body:not(.is-macos) .words-head {
+  padding-top: 12px;
+}
+
+body:not(.is-macos) .settings-body {
+  padding-top: 16px;
+}
+
+body:not(.is-macos) .settings-group {
+  background: var(--surface-raised);
+}
+
+body:not(.is-macos) .float-card {
+  border: 1px solid var(--separator);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+body:not(.is-macos) .tray-menu {
+  border: 1px solid var(--separator);
+  background: var(--surface-raised);
+}
+
+/* Slim overlay-style scrollbars for the resizable windows (mac already has
+   overlay scrollbars; this mainly tames the chunky Windows/Linux defaults). */
+.word-rows::-webkit-scrollbar,
+.settings-body::-webkit-scrollbar {
+  width: 10px;
+}
+
+.word-rows::-webkit-scrollbar-thumb,
+.settings-body::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 5px;
+  background: var(--control-bg-hover);
+  background-clip: padding-box;
+}
+
+.word-rows::-webkit-scrollbar-track,
+.settings-body::-webkit-scrollbar-track {
+  background: transparent;
 }

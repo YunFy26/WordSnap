@@ -61,6 +61,15 @@ if (!app) {
   throw new Error("Missing #app root");
 }
 
+type DesktopOS = "macos" | "windows" | "linux";
+
+const os: DesktopOS = navigator.userAgent.includes("Windows")
+  ? "windows"
+  : navigator.userAgent.includes("Mac")
+    ? "macos"
+    : "linux";
+document.body.classList.add(`is-${os}`);
+
 const view = new URLSearchParams(window.location.search).get("view") ?? "words";
 document.body.dataset.view = view;
 
@@ -110,8 +119,7 @@ function renderFloat(container: HTMLElement, payload: FloatPayload) {
   if (payload.state === "loading") {
     container.innerHTML = `
       <section class="float-card float-card--loading">
-        <div class="float-arrow"></div>
-        <div class="float-word">${original}</div>
+        <div class="float-word float-clamp">${original}</div>
         <div class="float-loading-row">
           <span class="spinner"></span>
           <span>翻译中…</span>
@@ -129,11 +137,12 @@ function renderFloat(container: HTMLElement, payload: FloatPayload) {
     const hint = needsSettings ? "点按前往设置" : "未记录 · 点按重试";
     container.innerHTML = `
       <button class="float-card float-card--error" type="button" id="retry">
-        <div class="float-arrow"></div>
-        <div class="float-word">${original}</div>
-        <div class="float-error-row">
-          <span class="error-dot">!</span>
-          <span>${escapeHtml(message)}</span>
+        <div class="float-word float-clamp">${original}</div>
+        <div class="float-scroll">
+          <div class="float-error-row">
+            <span class="error-dot">!</span>
+            <span>${escapeHtml(message)}</span>
+          </div>
         </div>
         <div class="float-footer float-footer--muted">${hint}</div>
       </button>
@@ -148,9 +157,10 @@ function renderFloat(container: HTMLElement, payload: FloatPayload) {
   if (payload.state === "sentence") {
     container.innerHTML = `
       <section class="float-card">
-        <div class="float-arrow"></div>
-        <div class="float-source">${original}</div>
-        <div class="float-translation float-translation--sentence">${translation}</div>
+        <div class="float-scroll">
+          <div class="float-source">${original}</div>
+          <div class="float-translation float-translation--sentence">${translation}</div>
+        </div>
         <div class="float-footer">
           <span class="skip-mark"><span></span></span>
           <span>整句翻译 · 未记入单词本</span>
@@ -165,9 +175,10 @@ function renderFloat(container: HTMLElement, payload: FloatPayload) {
     const count = payload.count ?? 1;
     container.innerHTML = `
       <section class="float-card">
-        <div class="float-arrow"></div>
         <div class="float-word">${original}</div>
-        <div class="float-translation">${translation}</div>
+        <div class="float-scroll">
+          <div class="float-translation">${translation}</div>
+        </div>
         <div class="float-footer float-footer--recorded">
           <span class="record-mark">✓</span>
           <span>已记入词表 · 第 ${count} 次</span>
@@ -189,11 +200,17 @@ function fitFloatWindow(container: HTMLElement) {
       return;
     }
 
-    // Width is fixed by the backend per state; only refine the height so the
-    // card is never clipped. The card fills the window edge-to-edge now.
+    // Width is fixed by the backend per state; only refine the height. The card
+    // is capped at the window height with the overflow inside `.float-scroll`,
+    // so ask for the card's visible height plus whatever the scroll area hides.
+    // The backend clamps the result; anything beyond the clamp stays scrollable.
+    let height = card.getBoundingClientRect().height;
+    const scroll = card.querySelector<HTMLElement>(".float-scroll");
+    if (scroll) {
+      height += Math.max(0, scroll.scrollHeight - scroll.getBoundingClientRect().height);
+    }
     const width = Math.round(window.innerWidth);
-    const height = Math.ceil(card.getBoundingClientRect().height);
-    command("resize_float", { width, height }).catch(() => undefined);
+    command("resize_float", { width, height: Math.ceil(height) }).catch(() => undefined);
   });
 }
 
@@ -350,6 +367,9 @@ async function mountSettings(root: HTMLElement) {
 }
 
 function mountMenu(root: HTMLElement) {
+  const modifier = os === "macos" ? "⌘" : "Ctrl+";
+  const hotkey = os === "macos" ? "⌥T" : "Alt+T";
+
   root.className = "menu-root";
   root.innerHTML = `
     <nav class="tray-menu">
@@ -357,19 +377,19 @@ function mountMenu(root: HTMLElement) {
         <span class="brand-icon"><span></span></span>
         <span class="tray-title">
           <strong>WordSnap</strong>
-          <small>已就绪 · ⌥T 翻译</small>
+          <small>已就绪 · ${hotkey} 翻译</small>
         </span>
       </header>
       <div class="menu-separator"></div>
       <button class="menu-item" type="button" id="open-words">
-        <span>打开词表</span><span>⌘L</span>
+        <span>打开词表</span><span>${modifier}L</span>
       </button>
       <button class="menu-item" type="button" id="open-settings">
-        <span>设置…</span><span>⌘,</span>
+        <span>设置…</span><span>${modifier},</span>
       </button>
       <div class="menu-separator"></div>
       <button class="menu-item" type="button" id="quit">
-        <span>退出 WordSnap</span><span>⌘Q</span>
+        <span>退出 WordSnap</span><span>${modifier}Q</span>
       </button>
     </nav>
   `;
@@ -377,6 +397,28 @@ function mountMenu(root: HTMLElement) {
   query("#open-words").addEventListener("click", () => command("show_words"));
   query("#open-settings").addEventListener("click", () => command("show_settings"));
   query("#quit").addEventListener("click", () => command("quit_app"));
+
+  // Make the displayed shortcuts real while the menu has focus.
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      command("hide_menu");
+      return;
+    }
+    const withModifier = os === "macos" ? event.metaKey : event.ctrlKey;
+    if (!withModifier) {
+      return;
+    }
+    if (event.key === "l" || event.key === "L") {
+      event.preventDefault();
+      command("show_words");
+    } else if (event.key === ",") {
+      event.preventDefault();
+      command("show_settings");
+    } else if (event.key === "q" || event.key === "Q") {
+      event.preventDefault();
+      command("quit_app");
+    }
+  });
 }
 
 async function command<T>(name: string, args?: Record<string, unknown>): Promise<T> {

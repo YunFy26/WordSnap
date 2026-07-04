@@ -382,8 +382,13 @@ fn setup_global_shortcut(app: &mut tauri::App) -> Result<()> {
 }
 
 fn setup_tray(app: &mut tauri::App) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let tooltip_text = "WordSnap · ⌥T 翻译";
+    #[cfg(not(target_os = "macos"))]
+    let tooltip_text = "WordSnap · Alt+T 翻译";
+
     TrayIconBuilder::with_id("wordsnap")
-        .tooltip("WordSnap · ⌥T 翻译")
+        .tooltip(tooltip_text)
         .icon(tray_template_icon()?)
         .icon_as_template(true)
         .show_menu_on_left_click(false)
@@ -446,10 +451,15 @@ async fn process_hotkey(app: AppHandle) -> Result<()> {
     let selected =
         capture_selected_text_on_main(&app).context("failed to capture selected text")?;
     if selected.trim().is_empty() {
+        #[cfg(target_os = "macos")]
+        let error_msg = "请先选中英文文本，再按 ⌥T。若已选中，请在系统设置中允许 WordSnap 使用辅助功能。";
+        #[cfg(not(target_os = "macos"))]
+        let error_msg = "请先选中英文文本，再按 Alt+T。";
+
         show_error_float(
             &app,
             "未读取到文本",
-            "请先选中英文文本，再按 ⌥T。若已选中，请在系统设置中允许 WordSnap 使用辅助功能。",
+            error_msg,
         );
         return Ok(());
     }
@@ -551,7 +561,10 @@ fn show_error_float(app: &AppHandle, original: impl Into<String>, error: impl In
 fn friendly_hotkey_error(error: &anyhow::Error) -> &'static str {
     let message = error.to_string();
     if message.contains("capture selected text") || message.contains("input simulator") {
-        "无法读取当前选中文本。请确认已选中英文，并在系统设置中允许 WordSnap 使用辅助功能。"
+        #[cfg(target_os = "macos")]
+        return "无法读取当前选中文本。请确认已选中英文，并在系统设置中允许 WordSnap 使用辅助功能。";
+        #[cfg(not(target_os = "macos"))]
+        return "无法读取当前选中文本。请确认已选中英文。";
     } else {
         "翻译失败，请检查网络或 API 设置。"
     }
@@ -687,8 +700,15 @@ fn capture_selected_text() -> Result<String> {
     #[cfg(not(target_os = "macos"))]
     let modifier = Key::Control;
 
+    #[cfg(target_os = "macos")]
+    let key_c = Key::Unicode('c');
+    #[cfg(target_os = "windows")]
+    let key_c = Key::Other(0x43); // VK_C
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let key_c = Key::Unicode('c');
+
     enigo.key(modifier, Press).map_err(enigo_err)?;
-    enigo.key(Key::Unicode('c'), Click).map_err(enigo_err)?;
+    enigo.key(key_c, Click).map_err(enigo_err)?;
     enigo.key(modifier, Release).map_err(enigo_err)?;
     thread::sleep(Duration::from_millis(140));
 
@@ -866,10 +886,8 @@ fn toggle_menu_window(app: &AppHandle, tray_x: i32, tray_y: i32) {
             let w = window_size.width as i32;
             let h = window_size.height as i32;
 
-            // Compute horizontal position: align window right edge near the tray icon,
-            // scaling the offset by DPI.
-            let right_offset = (32.0 * scale_factor) as i32;
-            let mut x = tray_x - w + right_offset;
+            // Center the window horizontally on the tray icon click position.
+            let mut x = tray_x - w / 2;
 
             // Determine if the taskbar is at the top or bottom of the screen.
             let monitor_center_y = work_area.position.y + (work_area.size.height as i32) / 2;

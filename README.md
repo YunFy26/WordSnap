@@ -43,9 +43,23 @@ WordSnap 的第一版只做“划词翻译 + 自动记单词”。当前没有 O
 
 macOS 首次使用时，WordSnap 可能需要辅助功能权限。它会通过模拟复制当前选区来读取文本，因此如果浮窗提示无法读取选中文本，请在系统设置中允许 WordSnap 使用辅助功能。
 
+## 免安装使用 / Portable
+
+不想从源码构建的用户，可以直接从 [GitHub Releases](../../releases) 下载对应平台的构建产物，无需安装即可运行。推荐优先选择「免安装 / 绿色版」：
+
+- macOS (Apple Silicon)：`WordSnap_<版本>_macos-aarch64_portable.zip`
+- macOS (Intel)：`WordSnap_<版本>_macos-x64_portable.zip`
+  解压后直接双击 `WordSnap.app`。应用未签名，首次打开若被 Gatekeeper 拦截，请右键点击 App → 选择「打开」，或在终端执行 `xattr -cr WordSnap.app` 后再打开。
+- Windows x64：`WordSnap_<版本>_windows-x64_portable.zip`
+  解压即用，双击 `WordSnap.exe`。需要系统自带的 WebView2 运行时（Win10/11 一般已内置）。
+- Linux x64：`*.AppImage`
+  下载后执行 `chmod +x WordSnap_*.AppImage`，然后直接运行。
+
+偏好安装包的用户，也可以在同一 Release 页面下载 `.dmg` / `.msi` / `.exe (NSIS)` / `.deb` 安装器。
+
 ## Getting Started
 
-安装依赖：
+如果需要从源码构建，先安装依赖：
 
 ```bash
 npm install

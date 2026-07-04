@@ -213,6 +213,23 @@ fn list_words(state: State<'_, AppState>) -> Result<WordListPayload, String> {
 }
 
 #[tauri::command]
+fn remove_word(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    word: String,
+) -> Result<WordListPayload, String> {
+    let normalized = word.trim().to_lowercase();
+    if normalized.is_empty() {
+        return Err("单词不能为空。".to_string());
+    }
+
+    delete_word(&state, &normalized).map_err(to_string)?;
+    let payload = read_words(&state).map_err(to_string)?;
+    let _ = app.emit("words-updated", ());
+    Ok(payload)
+}
+
+#[tauri::command]
 fn current_float(state: State<'_, AppState>) -> Result<FloatPayload, String> {
     state
         .float
@@ -346,6 +363,7 @@ pub fn run() {
             hide_menu,
             hide_settings,
             list_words,
+            remove_word,
             quit_app,
             resize_float,
             retry_translation,
@@ -1075,6 +1093,16 @@ fn upsert_word(state: &AppState, word: &str, translation: &str) -> Result<i64> {
     )?;
 
     Ok(count)
+}
+
+fn delete_word(state: &AppState, word: &str) -> Result<()> {
+    let conn = state
+        .conn
+        .lock()
+        .map_err(|_| anyhow!("database lock poisoned"))?;
+
+    conn.execute("DELETE FROM words WHERE word = ?1", params![word])?;
+    Ok(())
 }
 
 fn init_db(conn: &Connection) -> Result<()> {

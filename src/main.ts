@@ -56,6 +56,15 @@ const TARGET_LANGUAGES = [
   "土耳其语",
 ];
 
+let mockWords: WordRecord[] = [
+  { word: "manifest", translation: "清单;显示;表明", count: 3, firstSeenAt: "", lastSeenAt: "", recent: "11:05" },
+  { word: "ephemeral", translation: "短暂的;瞬息的", count: 2, firstSeenAt: "", lastSeenAt: "", recent: "09:14" },
+  { word: "resilient", translation: "有弹性的;能复原的", count: 5, firstSeenAt: "", lastSeenAt: "", recent: "昨天" },
+  { word: "throughput", translation: "吞吐量", count: 1, firstSeenAt: "", lastSeenAt: "", recent: "昨天" },
+  { word: "ambiguous", translation: "模糊的;含糊的", count: 4, firstSeenAt: "", lastSeenAt: "", recent: "6/29" },
+  { word: "concurrency", translation: "并发", count: 2, firstSeenAt: "", lastSeenAt: "", recent: "6/28" },
+];
+
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
   throw new Error("Missing #app root");
@@ -224,11 +233,17 @@ async function mountWords(root: HTMLElement) {
         <span>译文</span>
         <span>次数</span>
         <span>最近</span>
+        <span>操作</span>
       </div>
       <div class="word-rows" id="word-rows"></div>
       <footer class="words-stat" id="words-stat">共 0 个单词</footer>
     </main>
   `;
+
+  const rows = query<HTMLDivElement>("#word-rows");
+  rows.addEventListener("pointerup", handleWordRemove);
+  rows.addEventListener("click", handleWordRemove);
+  rows.addEventListener("keydown", handleWordRemoveKeydown);
 
   await refreshWords();
   listen("words-updated", () => {
@@ -236,21 +251,71 @@ async function mountWords(root: HTMLElement) {
   });
 }
 
+function closestWordRemoveButton(target: EventTarget | null) {
+  if (target instanceof Element) {
+    return target.closest<HTMLButtonElement>(".word-remove");
+  }
+  if (target instanceof Node) {
+    return target.parentElement?.closest<HTMLButtonElement>(".word-remove") ?? null;
+  }
+  return null;
+}
+
+function handleWordRemoveKeydown(event: KeyboardEvent) {
+  if (event.key !== "Enter" && event.key !== " ") {
+    return;
+  }
+  handleWordRemove(event);
+}
+
+async function handleWordRemove(event: Event) {
+  if (event instanceof PointerEvent && event.button !== 0) {
+    return;
+  }
+
+  const button = closestWordRemoveButton(event.target);
+  const word = button?.dataset.word;
+  if (!button || !word || button.disabled) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  button.disabled = true;
+  query<HTMLElement>("#words-stat").textContent = `正在移除「${word}」…`;
+
+  try {
+    const payload = await command<WordListPayload>("remove_word", { word });
+    renderWords(payload);
+  } catch (error) {
+    button.disabled = false;
+    query<HTMLElement>("#words-stat").textContent = `移除失败：${String(error)}`;
+  }
+}
+
 async function refreshWords() {
   const payload = await command<WordListPayload>("list_words");
+  renderWords(payload);
+}
+
+function renderWords(payload: WordListPayload) {
   const rows = query<HTMLDivElement>("#word-rows");
-  rows.innerHTML = payload.words
+  rows.innerHTML = payload.words.length
+    ? payload.words
     .map(
-      (word, index) => `
-        <div class="word-row ${index === 0 ? "is-selected" : ""}">
+      (word) => `
+        <div class="word-row">
           <span title="${escapeAttr(word.word)}">${escapeHtml(word.word)}</span>
           <span title="${escapeAttr(word.translation)}">${escapeHtml(word.translation)}</span>
           <span>${word.count}</span>
           <span>${escapeHtml(word.recent)}</span>
+          <button class="word-remove" type="button" title="移除" aria-label="移除 ${escapeAttr(word.word)}" data-word="${escapeAttr(word.word)}">×</button>
         </div>
       `,
     )
-    .join("");
+    .join("")
+    : `<div class="words-empty">暂无单词</div>`;
   query<HTMLElement>("#words-stat").textContent = `共 ${payload.total} 个单词`;
 }
 
@@ -451,15 +516,17 @@ function mockCommand<T>(name: string, args?: Record<string, unknown>): T {
 
   if (name === "list_words") {
     return {
-      total: 128,
-      words: [
-        { word: "manifest", translation: "清单;显示;表明", count: 3, firstSeenAt: "", lastSeenAt: "", recent: "11:05" },
-        { word: "ephemeral", translation: "短暂的;瞬息的", count: 2, firstSeenAt: "", lastSeenAt: "", recent: "09:14" },
-        { word: "resilient", translation: "有弹性的;能复原的", count: 5, firstSeenAt: "", lastSeenAt: "", recent: "昨天" },
-        { word: "throughput", translation: "吞吐量", count: 1, firstSeenAt: "", lastSeenAt: "", recent: "昨天" },
-        { word: "ambiguous", translation: "模糊的;含糊的", count: 4, firstSeenAt: "", lastSeenAt: "", recent: "6/29" },
-        { word: "concurrency", translation: "并发", count: 2, firstSeenAt: "", lastSeenAt: "", recent: "6/28" },
-      ],
+      total: mockWords.length,
+      words: mockWords,
+    } as T;
+  }
+
+  if (name === "remove_word") {
+    const word = String(args?.word ?? "").trim().toLowerCase();
+    mockWords = mockWords.filter((record) => record.word.toLowerCase() !== word);
+    return {
+      total: mockWords.length,
+      words: mockWords,
     } as T;
   }
 

@@ -692,8 +692,27 @@ fn capture_selected_text() -> Result<String> {
     let mut clipboard = Clipboard::new().context("failed to open clipboard")?;
     let previous = clipboard.get_text().ok();
 
+    // Clear the clipboard first so that a copy which never lands reads back as
+    // empty instead of silently leaving the *previous* clipboard text in place
+    // (which we'd then mistranslate). This is what made Windows appear to only
+    // ever translate the last manually copied content.
+    let _ = clipboard.set_text(String::new());
+
     let mut enigo = Enigo::new(&EnigoSettings::default())
         .map_err(|error| anyhow!("failed to initialize input simulator: {error:?}"))?;
+
+    // The global shortcut fires on key-*down*, so Alt (from Alt+T / Option+T)
+    // is still physically held when we get here. On Windows/Linux synthetic
+    // input shares the real keyboard state, so a held Alt turns the copy into
+    // Ctrl+Alt+C and nothing is copied — the reason double-click selections
+    // weren't captured. Lift Alt before issuing the copy. (macOS synthetic
+    // events carry their own modifier flags, so it isn't affected and we leave
+    // its key state untouched.)
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = enigo.key(Key::Alt, Release);
+        thread::sleep(Duration::from_millis(20));
+    }
 
     #[cfg(target_os = "macos")]
     let modifier = Key::Meta;
@@ -703,16 +722,29 @@ fn capture_selected_text() -> Result<String> {
     #[cfg(target_os = "macos")]
     let key_c = Key::Unicode('c');
     #[cfg(target_os = "windows")]
-    let key_c = Key::Other(0x43); // VK_C
+    let key_c = Key::Other(0x43); // VK_C — Unicode('c') would bypass the Ctrl modifier on Windows
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let key_c = Key::Unicode('c');
 
     enigo.key(modifier, Press).map_err(enigo_err)?;
     enigo.key(key_c, Click).map_err(enigo_err)?;
     enigo.key(modifier, Release).map_err(enigo_err)?;
-    thread::sleep(Duration::from_millis(140));
 
-    let selected = clipboard.get_text().unwrap_or_default();
+    // Poll for the copy to land rather than assuming a single fixed delay is
+    // enough — clipboard population latency varies by app, and a too-short wait
+    // showed up as stale/empty results. Caps at ~600ms, well under the 3s
+    // main-thread capture timeout.
+    let mut selected = String::new();
+    for _ in 0..50 {
+        thread::sleep(Duration::from_millis(12));
+        if let Ok(text) = clipboard.get_text() {
+            if !text.is_empty() {
+                selected = text;
+                break;
+            }
+        }
+    }
+
     if let Some(previous_text) = previous {
         let _ = clipboard.set_text(previous_text);
     }
@@ -744,11 +776,14 @@ fn cursor_position() -> (i32, i32) {
 /// Reads the cursor location on the main thread. On macOS the input APIs must be
 /// touched from the main thread, so calling `cursor_position()` from a spawned
 /// task can silently return the fallback and drop the popup in the wrong place.
+/// Returns the position already normalised to logical points (see
+/// `logical_cursor_position`).
 fn cursor_position_on_main(app: &AppHandle) -> (i32, i32) {
     let (tx, rx) = mpsc::channel();
+    let app_for_main = app.clone();
     if app
         .run_on_main_thread(move || {
-            let _ = tx.send(cursor_position());
+            let _ = tx.send(logical_cursor_position(&app_for_main));
         })
         .is_ok()
     {
@@ -756,7 +791,62 @@ fn cursor_position_on_main(app: &AppHandle) -> (i32, i32) {
             return pos;
         }
     }
-    cursor_position()
+    logical_cursor_position(app)
+}
+
+/// enigo reports the cursor in *physical* pixels on Windows/Linux but in
+/// *logical* points on macOS. The float is placed with `LogicalPosition`, so on
+/// a scaled Windows/Linux display the raw physical coordinate would be pushed
+/// toward the bottom-right by the scale factor (the popup landing far from the
+/// selection). Normalise to logical points here so the anchor is correct on
+/// every platform.
+fn logical_cursor_position(app: &AppHandle) -> (i32, i32) {
+    let (raw_x, raw_y) = cursor_position();
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app;
+        (raw_x, raw_y)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let scale = app
+            .get_webview_window("float")
+            .and_then(|window| {
+                monitor_scale_for_physical_point(&window, raw_x as f64, raw_y as f64)
+            })
+            .unwrap_or(1.0);
+        (
+            (raw_x as f64 / scale).round() as i32,
+            (raw_y as f64 / scale).round() as i32,
+        )
+    }
+}
+
+/// Scale factor of the monitor whose *physical* bounds contain the given
+/// physical point, falling back to the current/primary monitor.
+#[cfg(not(target_os = "macos"))]
+fn monitor_scale_for_physical_point(window: &tauri::WebviewWindow, x: f64, y: f64) -> Option<f64> {
+    if let Ok(monitors) = window.available_monitors() {
+        for monitor in &monitors {
+            let pos = monitor.position();
+            let size = monitor.size();
+            let left = pos.x as f64;
+            let top = pos.y as f64;
+            if x >= left
+                && x < left + size.width as f64
+                && y >= top
+                && y < top + size.height as f64
+            {
+                return Some(monitor.scale_factor());
+            }
+        }
+    }
+    window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .map(|monitor| monitor.scale_factor())
 }
 
 fn set_float_payload(app: &AppHandle, payload: FloatPayload, width: u32, height: u32) {

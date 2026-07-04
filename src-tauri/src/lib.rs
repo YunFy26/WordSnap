@@ -7,12 +7,21 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
+#[cfg(not(target_os = "macos"))]
 use arboard::Clipboard;
 use chrono::{DateTime, Local, Utc};
 use enigo::{
     Direction::{Click, Press, Release},
     Enigo, Key, Keyboard, Mouse, Settings as EnigoSettings,
 };
+#[cfg(target_os = "macos")]
+use objc2::rc::Retained;
+#[cfg(target_os = "macos")]
+use objc2::runtime::ProtocolObject;
+#[cfg(target_os = "macos")]
+use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardType, NSPasteboardTypeString};
+#[cfg(target_os = "macos")]
+use objc2_foundation::{NSArray, NSData};
 use reqwest::Client;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -706,6 +715,142 @@ fn truncate(text: &str, max_chars: usize) -> String {
     result
 }
 
+#[cfg(target_os = "macos")]
+struct MacPasteboardItemSnapshot {
+    representations: Vec<MacPasteboardRepresentation>,
+}
+
+#[cfg(target_os = "macos")]
+struct MacPasteboardRepresentation {
+    data_type: Retained<NSPasteboardType>,
+    data: Vec<u8>,
+}
+
+#[cfg(target_os = "macos")]
+struct MacClipboardRestoreGuard {
+    pasteboard: Retained<NSPasteboard>,
+    snapshot: Vec<MacPasteboardItemSnapshot>,
+    restore_if_change_count: isize,
+}
+
+#[cfg(target_os = "macos")]
+impl MacClipboardRestoreGuard {
+    fn new() -> Self {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        let restore_if_change_count = pasteboard.changeCount();
+        let snapshot = snapshot_macos_pasteboard(&pasteboard);
+
+        Self {
+            pasteboard,
+            snapshot,
+            restore_if_change_count,
+        }
+    }
+
+    fn clear_for_capture(&mut self) {
+        self.restore_if_change_count = self.pasteboard.clearContents();
+    }
+
+    fn mark_current_as_owned(&mut self) {
+        self.restore_if_change_count = self.pasteboard.changeCount();
+    }
+
+    fn restore(&mut self) {
+        // If the user copied something while WordSnap was translating, do not
+        // overwrite their new clipboard contents with our older snapshot.
+        if self.pasteboard.changeCount() != self.restore_if_change_count {
+            return;
+        }
+
+        let _ = self.pasteboard.clearContents();
+        if self.snapshot.is_empty() {
+            return;
+        }
+
+        let mut items = Vec::new();
+        for snapshot_item in &self.snapshot {
+            let pasteboard_item = NSPasteboardItem::new();
+            let mut wrote_any = false;
+
+            for representation in &snapshot_item.representations {
+                let data = NSData::with_bytes(&representation.data);
+                wrote_any |= pasteboard_item.setData_forType(&data, &representation.data_type);
+            }
+
+            if wrote_any {
+                items.push(ProtocolObject::from_retained(pasteboard_item));
+            }
+        }
+
+        if !items.is_empty() {
+            let objects = NSArray::from_retained_slice(&items);
+            let _ = self.pasteboard.writeObjects(&objects);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for MacClipboardRestoreGuard {
+    fn drop(&mut self) {
+        self.restore();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn snapshot_macos_pasteboard(pasteboard: &NSPasteboard) -> Vec<MacPasteboardItemSnapshot> {
+    let Some(items) = pasteboard.pasteboardItems() else {
+        return Vec::new();
+    };
+
+    items
+        .to_vec()
+        .into_iter()
+        .filter_map(|item| {
+            let representations = item
+                .types()
+                .to_vec()
+                .into_iter()
+                .filter_map(|data_type| {
+                    item.dataForType(&data_type)
+                        .map(|data| MacPasteboardRepresentation {
+                            data_type,
+                            data: data.to_vec(),
+                        })
+                })
+                .collect::<Vec<_>>();
+
+            (!representations.is_empty()).then_some(MacPasteboardItemSnapshot { representations })
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn capture_selected_text() -> Result<String> {
+    let mut restore_guard = MacClipboardRestoreGuard::new();
+    restore_guard.clear_for_capture();
+
+    simulate_copy_selection()?;
+
+    let mut selected = String::new();
+    for _ in 0..50 {
+        thread::sleep(Duration::from_millis(12));
+        if let Some(text) = restore_guard
+            .pasteboard
+            .stringForType(unsafe { NSPasteboardTypeString })
+        {
+            let text = text.to_string();
+            if !text.is_empty() {
+                selected = text;
+                restore_guard.mark_current_as_owned();
+                break;
+            }
+        }
+    }
+
+    Ok(selected)
+}
+
+#[cfg(not(target_os = "macos"))]
 fn capture_selected_text() -> Result<String> {
     let mut clipboard = Clipboard::new().context("failed to open clipboard")?;
     let previous = clipboard.get_text().ok();
@@ -716,6 +861,31 @@ fn capture_selected_text() -> Result<String> {
     // ever translate the last manually copied content.
     let _ = clipboard.set_text(String::new());
 
+    simulate_copy_selection()?;
+
+    // Poll for the copy to land rather than assuming a single fixed delay is
+    // enough — clipboard population latency varies by app, and a too-short wait
+    // showed up as stale/empty results. Caps at ~600ms, well under the 3s
+    // main-thread capture timeout.
+    let mut selected = String::new();
+    for _ in 0..50 {
+        thread::sleep(Duration::from_millis(12));
+        if let Ok(text) = clipboard.get_text() {
+            if !text.is_empty() {
+                selected = text;
+                break;
+            }
+        }
+    }
+
+    if let Some(previous_text) = previous {
+        let _ = clipboard.set_text(previous_text);
+    }
+
+    Ok(selected)
+}
+
+fn simulate_copy_selection() -> Result<()> {
     let mut enigo = Enigo::new(&EnigoSettings::default())
         .map_err(|error| anyhow!("failed to initialize input simulator: {error:?}"))?;
 
@@ -748,26 +918,7 @@ fn capture_selected_text() -> Result<String> {
     enigo.key(key_c, Click).map_err(enigo_err)?;
     enigo.key(modifier, Release).map_err(enigo_err)?;
 
-    // Poll for the copy to land rather than assuming a single fixed delay is
-    // enough — clipboard population latency varies by app, and a too-short wait
-    // showed up as stale/empty results. Caps at ~600ms, well under the 3s
-    // main-thread capture timeout.
-    let mut selected = String::new();
-    for _ in 0..50 {
-        thread::sleep(Duration::from_millis(12));
-        if let Ok(text) = clipboard.get_text() {
-            if !text.is_empty() {
-                selected = text;
-                break;
-            }
-        }
-    }
-
-    if let Some(previous_text) = previous {
-        let _ = clipboard.set_text(previous_text);
-    }
-
-    Ok(selected)
+    Ok(())
 }
 
 fn capture_selected_text_on_main(app: &AppHandle) -> Result<String> {

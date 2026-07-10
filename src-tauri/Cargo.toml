@@ -4,6 +4,9 @@ version = "0.1.1"
 description = "A lightweight desktop selection translation tool."
 authors = ["Yuntsy"]
 edition = "2021"
+license = "MIT"
+homepage = "https://github.com/YunFy26/WordSnap"
+repository = "https://github.com/YunFy26/WordSnap"
 
 [lib]
 name = "wordsnap_lib"

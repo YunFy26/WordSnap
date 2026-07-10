@@ -2,11 +2,27 @@
   "name": "wordsnap",
   "private": true,
   "version": "0.1.1",
+  "license": "MIT",
+  "homepage": "https://github.com/YunFy26/WordSnap#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YunFy26/WordSnap.git"
+  },
+  "bugs": {
+    "url": "https://github.com/YunFy26/WordSnap/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc && vite build",
-    "check": "npm run build && cargo check --manifest-path src-tauri/Cargo.toml",
+    "format:check": "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check",
+    "lint": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings",
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml --all-targets --all-features",
+    "audit": "npm audit --registry=https://registry.npmjs.org --audit-level=high",
+    "check": "npm run build && npm run format:check && npm run lint && npm test",
     "desktop:build": "tauri build",
     "preview": "vite preview",
     "tauri": "tauri",

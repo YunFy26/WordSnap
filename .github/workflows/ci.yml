@@ -12,10 +12,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
-    name: Frontend and Rust checks
+    name: Build, lint, and test
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -34,6 +39,8 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
 
       - name: Cache Rust build artifacts
         uses: swatinem/rust-cache@v2
@@ -43,8 +50,8 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build frontend
-        run: npm run build
+      - name: Run project checks
+        run: npm run check
 
-      - name: Check Rust
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+      - name: Audit npm dependencies
+        run: npm run audit

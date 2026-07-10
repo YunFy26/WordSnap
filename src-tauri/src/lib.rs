@@ -1,6 +1,6 @@
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{mpsc, Mutex},
     thread,
     time::Duration,
@@ -29,8 +29,7 @@ use serde_json::Value;
 use tauri::image::Image;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, State,
-    WindowEvent,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, State, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
@@ -359,10 +358,22 @@ pub fn run() {
                 app.handle().set_dock_visibility(false)?;
             }
 
-            app.manage(AppState::new(app.handle())?);
+            let state = AppState::new(app.handle())?;
+            let should_show_settings = state
+                .settings
+                .lock()
+                .map(|settings| settings.api_key.trim().is_empty())
+                .unwrap_or(true);
+
+            app.manage(state);
             setup_window_events(app);
             setup_tray(app)?;
             setup_global_shortcut(app)?;
+
+            if should_show_settings {
+                show_settings(app.handle().clone()).map_err(anyhow::Error::msg)?;
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -387,7 +398,7 @@ pub fn run() {
 
 fn setup_global_shortcut(app: &mut tauri::App) -> Result<()> {
     let shortcut = Shortcut::new(Some(Modifiers::ALT), Code::KeyT);
-    let registered_shortcut = shortcut.clone();
+    let registered_shortcut = shortcut;
 
     app.handle().plugin(
         tauri_plugin_global_shortcut::Builder::new()
@@ -419,16 +430,16 @@ fn setup_tray(app: &mut tauri::App) -> Result<()> {
         .icon(tray_template_icon()?)
         .icon_as_template(true)
         .show_menu_on_left_click(false)
-        .on_tray_icon_event(|tray, event| match event {
-            TrayIconEvent::Click {
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 position,
                 ..
-            } => {
+            } = event
+            {
                 toggle_menu_window(tray.app_handle(), position.x as i32, position.y as i32);
             }
-            _ => {}
         })
         .build(app)?;
 
@@ -479,15 +490,12 @@ async fn process_hotkey(app: AppHandle) -> Result<()> {
         capture_selected_text_on_main(&app).context("failed to capture selected text")?;
     if selected.trim().is_empty() {
         #[cfg(target_os = "macos")]
-        let error_msg = "请先选中英文文本，再按 ⌥T。若已选中，请在系统设置中允许 WordSnap 使用辅助功能。";
+        let error_msg =
+            "请先选中可复制的文本，再按 ⌥T。若已选中，请在系统设置中允许 WordSnap 使用辅助功能。";
         #[cfg(not(target_os = "macos"))]
-        let error_msg = "请先选中英文文本，再按 Alt+T。";
+        let error_msg = "请先选中可复制的文本，再按 Alt+T。";
 
-        show_error_float(
-            &app,
-            "未读取到文本",
-            error_msg,
-        );
+        show_error_float(&app, "未读取到文本", error_msg);
         return Ok(());
     }
 
@@ -589,9 +597,9 @@ fn friendly_hotkey_error(error: &anyhow::Error) -> &'static str {
     let message = error.to_string();
     if message.contains("capture selected text") || message.contains("input simulator") {
         #[cfg(target_os = "macos")]
-        return "无法读取当前选中文本。请确认已选中英文，并在系统设置中允许 WordSnap 使用辅助功能。";
+        return "无法读取当前选中文本。请确认文本可以复制，并在系统设置中允许 WordSnap 使用辅助功能。";
         #[cfg(not(target_os = "macos"))]
-        return "无法读取当前选中文本。请确认已选中英文。";
+        return "无法读取当前选中文本。请确认文本可以复制。";
     } else {
         "翻译失败，请检查网络或 API 设置。"
     }
@@ -612,12 +620,12 @@ async fn call_translation_api(
 
     let prompt = if is_word {
         format!(
-            "请把下面的英文单词或短语翻译成{}。\n只返回{}中最常见的释义或译法,多个释义用分号分隔。\n不要例句,不要词性,不要解释,不要 Markdown。\n\n文本:\n{}",
+            "请把下面的文本翻译成{}。\n如果当前文本已经是简体中文，请翻译为英文。\n只返回{}中最常见的释义或译法,多个释义用分号分隔。\n不要例句,不要词性,不要解释,不要 Markdown。\n\n文本:\n{}",
             target_lang, target_lang, text
         )
     } else {
         format!(
-            "请把下面的英文翻译成{}。\n只返回{}译文,不要解释,不要例句,不要 Markdown。\n\n文本:\n{}",
+            "请把下面的文本翻译成{}。\n如果当前文本已经是简体中文，请翻译为英文。\n只返回{}译文,不要解释,不要例句,不要 Markdown。\n\n文本:\n{}",
             target_lang, target_lang, text
         )
     };
@@ -647,7 +655,9 @@ async fn call_translation_api(
             } else {
                 "网络请求失败"
             };
-            return Err(anyhow!("{reason}：请检查网络，或确认「模型地址」是否正确可达。"));
+            return Err(anyhow!(
+                "{reason}：请检查网络，或确认「模型地址」是否正确可达。"
+            ));
         }
     };
 
@@ -664,10 +674,7 @@ async fn call_translation_api(
         ));
     }
 
-    let raw = response
-        .text()
-        .await
-        .context("无法读取 API 响应内容。")?;
+    let raw = response.text().await.context("无法读取 API 响应内容。")?;
     let body: Value = serde_json::from_str(&raw)
         .map_err(|_| anyhow!("API 响应不是有效的 JSON：{}", truncate(&raw, 120)))?;
     let content = body
@@ -1001,10 +1008,7 @@ fn monitor_scale_for_physical_point(window: &tauri::WebviewWindow, x: f64, y: f6
             let size = monitor.size();
             let left = pos.x as f64;
             let top = pos.y as f64;
-            if x >= left
-                && x < left + size.width as f64
-                && y >= top
-                && y < top + size.height as f64
+            if x >= left && x < left + size.width as f64 && y >= top && y < top + size.height as f64
             {
                 return Some(monitor.scale_factor());
             }
@@ -1128,16 +1132,16 @@ fn toggle_menu_window(app: &AppHandle, tray_x: i32, tray_y: i32) {
             monitors.into_iter().find(|m| {
                 let pos = m.position();
                 let size = m.size();
-                tray_x >= pos.x && tray_x < pos.x + size.width as i32 &&
-                tray_y >= pos.y && tray_y < pos.y + size.height as i32
+                tray_x >= pos.x
+                    && tray_x < pos.x + size.width as i32
+                    && tray_y >= pos.y
+                    && tray_y < pos.y + size.height as i32
             })
         } else {
             None
-        }.or_else(|| {
-            window.current_monitor().ok().flatten()
-        }).or_else(|| {
-            window.primary_monitor().ok().flatten()
-        });
+        }
+        .or_else(|| window.current_monitor().ok().flatten())
+        .or_else(|| window.primary_monitor().ok().flatten());
 
         if let Some(monitor) = monitor {
             let work_area = monitor.work_area();
@@ -1160,8 +1164,14 @@ fn toggle_menu_window(app: &AppHandle, tray_x: i32, tray_y: i32) {
             };
 
             // Clamp both coordinates to ensure the entire window stays within the work area.
-            x = x.clamp(work_area.position.x, work_area.position.x + work_area.size.width as i32 - w);
-            y = y.clamp(work_area.position.y, work_area.position.y + work_area.size.height as i32 - h);
+            x = x.clamp(
+                work_area.position.x,
+                work_area.position.x + work_area.size.width as i32 - w,
+            );
+            y = y.clamp(
+                work_area.position.y,
+                work_area.position.y + work_area.size.height as i32 - h,
+            );
 
             let _ = window.set_position(PhysicalPosition::new(x, y));
         } else {
@@ -1271,7 +1281,7 @@ fn init_db(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn load_settings(app_dir: &PathBuf) -> Result<StoredSettings> {
+fn load_settings(app_dir: &Path) -> Result<StoredSettings> {
     let path = app_dir.join("settings.json");
     if !path.exists() {
         return Ok(StoredSettings::default());
@@ -1295,7 +1305,7 @@ fn load_settings(app_dir: &PathBuf) -> Result<StoredSettings> {
     Ok(settings)
 }
 
-fn save_settings_file(app_dir: &PathBuf, settings: &StoredSettings) -> Result<()> {
+fn save_settings_file(app_dir: &Path, settings: &StoredSettings) -> Result<()> {
     fs::create_dir_all(app_dir)?;
     let raw = serde_json::to_string_pretty(settings)?;
     let path = app_dir.join("settings.json");
@@ -1400,4 +1410,50 @@ fn enigo_err(error: enigo::InputError) -> anyhow::Error {
 
 fn to_string<E: std::fmt::Display>(error: E) -> String {
     error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{chat_completions_url, is_single_english_word, mask_api_key, normalize_base_url};
+
+    #[test]
+    fn normalizes_openai_compatible_base_urls() {
+        assert_eq!(
+            normalize_base_url(" api.example.com/v1/ "),
+            "https://api.example.com/v1"
+        );
+        assert_eq!(
+            normalize_base_url("http://localhost:11434/v1/"),
+            "http://localhost:11434/v1"
+        );
+        assert_eq!(normalize_base_url(""), "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn builds_chat_completions_url_once() {
+        assert_eq!(
+            chat_completions_url("api.example.com/v1"),
+            "https://api.example.com/v1/chat/completions"
+        );
+        assert_eq!(
+            chat_completions_url("https://api.example.com/v1/chat/completions"),
+            "https://api.example.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn identifies_only_single_ascii_english_words() {
+        for word in ["hello", " well-known ", "A"] {
+            assert!(is_single_english_word(word), "expected word: {word}");
+        }
+        for text in ["", "two words", "中文", "hello!", "-"] {
+            assert!(!is_single_english_word(text), "expected non-word: {text}");
+        }
+    }
+
+    #[test]
+    fn masks_api_keys_without_exposing_more_than_the_tail() {
+        assert_eq!(mask_api_key("sk-example-1234"), "•••••••••••• 1234");
+        assert_eq!(mask_api_key("abc"), "•••••••••••• abc");
+    }
 }

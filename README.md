@@ -144,9 +144,9 @@ Base URL 可以填写完整地址，也可以省略协议。例如 `api.openai.c
 | `npm run tauri dev` | 启动 Tauri 桌面开发模式 |
 | `npm run tauri build` | 构建桌面应用安装包 |
 | `npm run desktop:build` | 同 `npm run tauri build`，用于本地打包 |
-| `npm run icons` | 从 `src-tauri/icons/icon.ico` 生成应用图标资源 |
+| `npm run icons` | 从 `icon-source.png` 和 `tray-source.svg` 生成应用与托盘图标 |
 
-`npm run icons` 使用 macOS 的 `sips` 和 `iconutil`，因此主要面向 macOS 开发环境。
+`npm run icons` 使用项目内的 Tauri CLI，可在安装 npm 依赖后的支持平台运行。
 
 ## CI/CD
 

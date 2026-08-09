@@ -15,13 +15,13 @@ use enigo::{
     Enigo, Key, Keyboard, Mouse, Settings as EnigoSettings,
 };
 #[cfg(target_os = "macos")]
-use objc2::rc::Retained;
+use objc2::rc::Retained as MacRetained;
 #[cfg(target_os = "macos")]
-use objc2::runtime::ProtocolObject;
+use objc2::runtime::ProtocolObject as MacProtocolObject;
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{
-    NSPasteboard, NSPasteboardItem, NSPasteboardType, NSPasteboardTypeString, NSWindow,
-    NSWindowCollectionBehavior,
+    NSPasteboard, NSPasteboardItem, NSPasteboardType, NSPasteboardTypeString,
+    NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 #[cfg(target_os = "macos")]
 use objc2_foundation::{NSArray, NSData};
@@ -34,7 +34,25 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, State, WindowEvent,
 };
+#[cfg(target_os = "macos")]
+use tauri_nspanel::{
+    tauri_panel, CollectionBehavior, ManagerExt as _, PanelLevel, StyleMask, WebviewWindowExt as _,
+};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+
+#[cfg(target_os = "macos")]
+tauri_panel! {
+    panel!(WordSnapFloatPanel {
+        config: {
+            can_become_key_window: true,
+            can_become_main_window: false,
+            is_floating_panel: true,
+            becomes_key_only_if_needed: true,
+            hides_on_deactivate: false,
+            works_when_modal: true
+        }
+    })
+}
 
 struct AppState {
     conn: Mutex<Connection>,
@@ -352,7 +370,11 @@ async fn retry_translation(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_nspanel::init());
+
+    builder
         .setup(|app| {
             #[cfg(target_os = "macos")]
             {
@@ -429,39 +451,58 @@ fn configure_macos_float_window(app: &AppHandle) -> Result<()> {
     let window = app
         .get_webview_window("float")
         .context("float window not found")?;
-    let ns_window = window
-        .ns_window()
-        .context("failed to access the macOS float window")?;
-    let ns_window = unsafe { &*ns_window.cast::<NSWindow>() };
+    let panel = window
+        .to_panel::<WordSnapFloatPanel>()
+        .context("failed to convert the macOS float window to an NSPanel")?;
 
-    // `CanJoinAllSpaces` covers regular Spaces, while `FullScreenAuxiliary`
-    // explicitly allows this utility popup to share another app's full-screen
-    // Space. The latter is mutually exclusive with the primary/none flags.
-    let mut behavior = ns_window.collectionBehavior();
-    behavior.remove(
-        NSWindowCollectionBehavior::FullScreenPrimary | NSWindowCollectionBehavior::FullScreenNone,
+    // A normal NSWindow cannot reliably appear over another application's
+    // native full-screen Space while WordSnap stays inactive. NSPanel plus the
+    // non-activating style is the AppKit pattern used by Spotlight-like tools.
+    panel.set_level(PanelLevel::Floating.value());
+    panel.set_style_mask(StyleMask::empty().nonactivating_panel().into());
+    panel.set_floating_panel(true);
+    panel.set_hides_on_deactivate(false);
+    panel.set_becomes_key_only_if_needed(true);
+    panel.set_works_when_modal(true);
+
+    panel.set_collection_behavior(
+        CollectionBehavior::new()
+            .can_join_all_spaces()
+            .full_screen_auxiliary()
+            .into(),
     );
-    behavior.insert(
-        NSWindowCollectionBehavior::CanJoinAllSpaces
-            | NSWindowCollectionBehavior::FullScreenAuxiliary,
-    );
-    ns_window.setCollectionBehavior(behavior);
+
+    // Fail fast if AppKit rejects any of the properties needed to share a
+    // native full-screen Space. This keeps future dependency/macOS changes
+    // from silently degrading back to the old invisible-window behavior.
+    let native_panel = panel.as_panel();
+    if !native_panel
+        .styleMask()
+        .contains(NSWindowStyleMask::NonactivatingPanel)
+    {
+        anyhow::bail!("macOS translation panel is activating");
+    }
+    let required_behavior = NSWindowCollectionBehavior::CanJoinAllSpaces
+        | NSWindowCollectionBehavior::FullScreenAuxiliary;
+    if !native_panel
+        .collectionBehavior()
+        .contains(required_behavior)
+    {
+        anyhow::bail!("macOS translation panel cannot join full-screen Spaces");
+    }
+    if !panel.is_floating_panel() || panel.hides_on_deactivate() {
+        anyhow::bail!("macOS translation panel floating behavior was not applied");
+    }
 
     Ok(())
 }
 
 #[cfg(target_os = "macos")]
 fn show_float_without_activation(window: &tauri::WebviewWindow) {
-    let window_for_main = window.clone();
-    if let Err(error) = window.run_on_main_thread(move || match window_for_main.ns_window() {
-        Ok(ns_window) => {
-            let ns_window = unsafe { &*ns_window.cast::<NSWindow>() };
-            // Unlike Tauri's `show()` (`makeKeyAndOrderFront`), this can place
-            // an accessory app's window above another app while leaving that
-            // app active. This is required for native full-screen Spaces.
-            ns_window.orderFrontRegardless();
-        }
-        Err(error) => eprintln!("failed to access the macOS translation popup: {error}"),
+    let app = window.app_handle().clone();
+    if let Err(error) = window.run_on_main_thread(move || match app.get_webview_panel("float") {
+        Ok(panel) => panel.show(),
+        Err(error) => eprintln!("failed to access the macOS translation panel: {error:?}"),
     }) {
         eprintln!("failed to schedule the macOS translation popup: {error}");
     }
@@ -777,13 +818,13 @@ struct MacPasteboardItemSnapshot {
 
 #[cfg(target_os = "macos")]
 struct MacPasteboardRepresentation {
-    data_type: Retained<NSPasteboardType>,
+    data_type: MacRetained<NSPasteboardType>,
     data: Vec<u8>,
 }
 
 #[cfg(target_os = "macos")]
 struct MacClipboardRestoreGuard {
-    pasteboard: Retained<NSPasteboard>,
+    pasteboard: MacRetained<NSPasteboard>,
     snapshot: Vec<MacPasteboardItemSnapshot>,
     restore_if_change_count: isize,
 }
@@ -833,7 +874,7 @@ impl MacClipboardRestoreGuard {
             }
 
             if wrote_any {
-                items.push(ProtocolObject::from_retained(pasteboard_item));
+                items.push(MacProtocolObject::from_retained(pasteboard_item));
             }
         }
 

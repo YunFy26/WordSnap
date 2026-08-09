@@ -450,6 +450,23 @@ fn configure_macos_float_window(app: &AppHandle) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn show_float_without_activation(window: &tauri::WebviewWindow) {
+    let window_for_main = window.clone();
+    if let Err(error) = window.run_on_main_thread(move || match window_for_main.ns_window() {
+        Ok(ns_window) => {
+            let ns_window = unsafe { &*ns_window.cast::<NSWindow>() };
+            // Unlike Tauri's `show()` (`makeKeyAndOrderFront`), this can place
+            // an accessory app's window above another app while leaving that
+            // app active. This is required for native full-screen Spaces.
+            ns_window.orderFrontRegardless();
+        }
+        Err(error) => eprintln!("failed to access the macOS translation popup: {error}"),
+    }) {
+        eprintln!("failed to schedule the macOS translation popup: {error}");
+    }
+}
+
 fn setup_tray(app: &mut tauri::App) -> Result<()> {
     #[cfg(target_os = "macos")]
     let tooltip_text = "WordSnap · ⌥T 翻译";
@@ -1075,15 +1092,16 @@ fn set_float_payload(app: &AppHandle, payload: FloatPayload, width: u32, height:
         let _ = window.set_size(LogicalSize::new(width as f64, height as f64));
         let _ = window.set_position(LogicalPosition::new(x, y));
         let _ = window.emit("float-updated", payload);
-        if let Err(error) = window.show() {
-            eprintln!("failed to show translation popup: {error}");
-        }
-        // On macOS, focusing activates this accessory app and can pull the user
-        // away from the full-screen Space that owns the selected text. Showing
-        // an always-on-top auxiliary window is sufficient and preserves focus.
+        #[cfg(target_os = "macos")]
+        show_float_without_activation(&window);
         #[cfg(not(target_os = "macos"))]
-        if let Err(error) = window.set_focus() {
-            eprintln!("failed to focus translation popup: {error}");
+        {
+            if let Err(error) = window.show() {
+                eprintln!("failed to show translation popup: {error}");
+            }
+            if let Err(error) = window.set_focus() {
+                eprintln!("failed to focus translation popup: {error}");
+            }
         }
     }
 }

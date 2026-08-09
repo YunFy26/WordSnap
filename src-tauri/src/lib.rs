@@ -19,7 +19,10 @@ use objc2::rc::Retained;
 #[cfg(target_os = "macos")]
 use objc2::runtime::ProtocolObject;
 #[cfg(target_os = "macos")]
-use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardType, NSPasteboardTypeString};
+use objc2_app_kit::{
+    NSPasteboard, NSPasteboardItem, NSPasteboardType, NSPasteboardTypeString, NSWindow,
+    NSWindowCollectionBehavior,
+};
 #[cfg(target_os = "macos")]
 use objc2_foundation::{NSArray, NSData};
 use reqwest::Client;
@@ -366,6 +369,8 @@ pub fn run() {
                 .unwrap_or(true);
 
             app.manage(state);
+            #[cfg(target_os = "macos")]
+            configure_macos_float_window(app.handle())?;
             setup_window_events(app);
             setup_tray(app)?;
             setup_global_shortcut(app)?;
@@ -416,6 +421,32 @@ fn setup_global_shortcut(app: &mut tauri::App) -> Result<()> {
     )?;
 
     app.global_shortcut().register(shortcut)?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn configure_macos_float_window(app: &AppHandle) -> Result<()> {
+    let window = app
+        .get_webview_window("float")
+        .context("float window not found")?;
+    let ns_window = window
+        .ns_window()
+        .context("failed to access the macOS float window")?;
+    let ns_window = unsafe { &*ns_window.cast::<NSWindow>() };
+
+    // `CanJoinAllSpaces` covers regular Spaces, while `FullScreenAuxiliary`
+    // explicitly allows this utility popup to share another app's full-screen
+    // Space. The latter is mutually exclusive with the primary/none flags.
+    let mut behavior = ns_window.collectionBehavior();
+    behavior.remove(
+        NSWindowCollectionBehavior::FullScreenPrimary | NSWindowCollectionBehavior::FullScreenNone,
+    );
+    behavior.insert(
+        NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary,
+    );
+    ns_window.setCollectionBehavior(behavior);
+
     Ok(())
 }
 
@@ -1044,8 +1075,16 @@ fn set_float_payload(app: &AppHandle, payload: FloatPayload, width: u32, height:
         let _ = window.set_size(LogicalSize::new(width as f64, height as f64));
         let _ = window.set_position(LogicalPosition::new(x, y));
         let _ = window.emit("float-updated", payload);
-        let _ = window.show();
-        let _ = window.set_focus();
+        if let Err(error) = window.show() {
+            eprintln!("failed to show translation popup: {error}");
+        }
+        // On macOS, focusing activates this accessory app and can pull the user
+        // away from the full-screen Space that owns the selected text. Showing
+        // an always-on-top auxiliary window is sufficient and preserves focus.
+        #[cfg(not(target_os = "macos"))]
+        if let Err(error) = window.set_focus() {
+            eprintln!("failed to focus translation popup: {error}");
+        }
     }
 }
 

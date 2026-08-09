@@ -24,6 +24,7 @@
         "visible": false,
         "resizable": false,
         "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
         "skipTaskbar": true,
         "shadow": true,
         "windowEffects": {

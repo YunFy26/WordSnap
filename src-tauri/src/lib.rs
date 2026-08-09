@@ -17,11 +17,11 @@ use enigo::{
 #[cfg(target_os = "macos")]
 use objc2::rc::Retained as MacRetained;
 #[cfg(target_os = "macos")]
-use objc2::runtime::ProtocolObject as MacProtocolObject;
+use objc2::runtime::{AnyObject as MacAnyObject, ProtocolObject as MacProtocolObject};
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{
-    NSPasteboard, NSPasteboardItem, NSPasteboardType, NSPasteboardTypeString,
-    NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSEvent as MacNSEvent, NSEventMask, NSPasteboard, NSPasteboardItem, NSPasteboardType,
+    NSPasteboardTypeString, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 #[cfg(target_os = "macos")]
 use objc2_foundation::{NSArray, NSData};
@@ -52,6 +52,14 @@ tauri_panel! {
             works_when_modal: true
         }
     })
+}
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    // AppKit owns the monitors until they are explicitly removed. Keeping the
+    // returned tokens on the main thread makes their lifetime match the app.
+    static MAC_FLOAT_CLICK_MONITORS: std::cell::RefCell<Vec<MacRetained<MacAnyObject>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 struct AppState {
@@ -392,7 +400,10 @@ pub fn run() {
 
             app.manage(state);
             #[cfg(target_os = "macos")]
-            configure_macos_float_window(app.handle())?;
+            {
+                configure_macos_float_window(app.handle())?;
+                setup_macos_float_click_monitor(app.handle())?;
+            }
             setup_window_events(app);
             setup_tray(app)?;
             setup_global_shortcut(app)?;
@@ -508,6 +519,88 @@ fn show_float_without_activation(window: &tauri::WebviewWindow) {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn setup_macos_float_click_monitor(app: &AppHandle) -> Result<()> {
+    let mouse_down_mask =
+        NSEventMask::LeftMouseDown | NSEventMask::RightMouseDown | NSEventMask::OtherMouseDown;
+
+    // Global monitors receive clicks delivered to other applications, which
+    // is the common case for a non-activating translation panel.
+    let app_for_global = app.clone();
+    let global_handler = block2::RcBlock::new(move |_event: std::ptr::NonNull<MacNSEvent>| {
+        schedule_hide_completed_float(&app_for_global);
+    });
+    let global_monitor =
+        MacNSEvent::addGlobalMonitorForEventsMatchingMask_handler(mouse_down_mask, &global_handler)
+            .context("failed to install the macOS global click monitor")?;
+
+    // Global monitors intentionally exclude this application. A local monitor
+    // covers clicks on WordSnap's tray/menu/settings windows while preserving
+    // clicks inside the translation card itself.
+    let app_for_local = app.clone();
+    let local_handler = block2::RcBlock::new(
+        move |event: std::ptr::NonNull<MacNSEvent>| -> *mut MacNSEvent {
+            let event_ref = unsafe { event.as_ref() };
+            let is_float_click = app_for_local
+                .get_webview_panel("float")
+                .ok()
+                .is_some_and(|panel| panel.as_panel().windowNumber() == event_ref.windowNumber());
+            if !is_float_click {
+                hide_completed_float(&app_for_local);
+            }
+            event.as_ptr()
+        },
+    );
+    let local_monitor = unsafe {
+        MacNSEvent::addLocalMonitorForEventsMatchingMask_handler(mouse_down_mask, &local_handler)
+    }
+    .context("failed to install the macOS local click monitor")?;
+
+    MAC_FLOAT_CLICK_MONITORS.with(|monitors| {
+        monitors
+            .borrow_mut()
+            .extend([global_monitor, local_monitor]);
+    });
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn schedule_hide_completed_float(app: &AppHandle) {
+    let app_for_main = app.clone();
+    if let Err(error) = app.run_on_main_thread(move || hide_completed_float(&app_for_main)) {
+        eprintln!("failed to schedule translation popup dismissal: {error}");
+    }
+}
+
+fn float_is_dismissible(state: &str) -> bool {
+    matches!(state, "word" | "sentence" | "error")
+}
+
+fn hide_completed_float(app: &AppHandle) {
+    let should_hide = app
+        .try_state::<AppState>()
+        .and_then(|state| {
+            state
+                .float
+                .lock()
+                .ok()
+                .map(|payload| float_is_dismissible(&payload.state))
+        })
+        .unwrap_or(false);
+    if !should_hide {
+        return;
+    }
+
+    #[cfg(target_os = "macos")]
+    if let Ok(panel) = app.get_webview_panel("float") {
+        panel.hide();
+    }
+    #[cfg(not(target_os = "macos"))]
+    if let Some(window) = app.get_webview_window("float") {
+        let _ = window.hide();
+    }
+}
+
 fn setup_tray(app: &mut tauri::App) -> Result<()> {
     #[cfg(target_os = "macos")]
     let tooltip_text = "WordSnap · ⌥T 翻译";
@@ -556,9 +649,15 @@ fn setup_window_events(app: &mut tauri::App) {
     for label in ["float", "menu"] {
         if let Some(window) = app.get_webview_window(label) {
             let window_for_event = window.clone();
+            let app_for_event = app.handle().clone();
+            let label_for_event = label;
             window.on_window_event(move |event| {
                 if let WindowEvent::Focused(false) = event {
-                    let _ = window_for_event.hide();
+                    if label_for_event == "float" {
+                        hide_completed_float(&app_for_event);
+                    } else {
+                        let _ = window_for_event.hide();
+                    }
                 }
             });
         }
@@ -1512,7 +1611,20 @@ fn to_string<E: std::fmt::Display>(error: E) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{chat_completions_url, is_single_english_word, mask_api_key, normalize_base_url};
+    use super::{
+        chat_completions_url, float_is_dismissible, is_single_english_word, mask_api_key,
+        normalize_base_url,
+    };
+
+    #[test]
+    fn dismisses_only_completed_float_states() {
+        for state in ["word", "sentence", "error"] {
+            assert!(float_is_dismissible(state), "expected dismissible: {state}");
+        }
+        for state in ["idle", "loading", "unknown"] {
+            assert!(!float_is_dismissible(state), "expected persistent: {state}");
+        }
+    }
 
     #[test]
     fn normalizes_openai_compatible_base_urls() {

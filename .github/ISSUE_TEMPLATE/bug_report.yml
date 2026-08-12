@@ -1,18 +1,18 @@
-name: Bug report
+name: 缺陷报告
 description: 报告可复现的问题或平台兼容性故障
-title: "[Bug]: "
+title: "[Bug] "
 labels: []
 body:
   - type: markdown
     attributes:
       value: |
-        感谢反馈。请勿粘贴 API Key、私人选中文本或未经脱敏的日志。安全漏洞请按照 SECURITY.md 私密报告。
+        请勿提交 API Key、私人选中文本或未经脱敏的日志。安全漏洞应按照 SECURITY.md 中的流程提交私密报告。
   - type: input
     id: version
     attributes:
       label: WordSnap 版本
-      description: 可填写 Release 版本或 commit SHA。
-      placeholder: 例如 0.1.1
+      description: 请填写发布版本或提交 SHA。
+      placeholder: 例如：0.1.1
     validations:
       required: true
   - type: dropdown
@@ -31,7 +31,7 @@ body:
     id: description
     attributes:
       label: 问题描述
-      description: 实际发生了什么？你原本期待什么？
+      description: 请分别说明实际行为和预期行为。
     validations:
       required: true
   - type: textarea
@@ -42,22 +42,22 @@ body:
         1. 启动 WordSnap
         2. 选中文本
         3. 按下快捷键
-        4. 观察到……
+        4. 记录实际结果
     validations:
       required: true
   - type: textarea
     id: context
     attributes:
       label: 补充信息
-      description: 可提供已脱敏的截图、错误信息、接口类型和桌面环境。
+      description: 可以提供已经脱敏的截图、错误信息、接口类型和桌面环境信息。
   - type: checkboxes
     id: checks
     attributes:
       label: 提交确认
       options:
-        - label: 我已搜索现有 Issue，没有找到相同问题。
+        - label: 我已检索现有 Issue，未发现相同问题。
           required: true
         - label: 我已移除 API Key、私人文本和其他敏感信息。
           required: true
-        - label: 这不是需要私密披露的安全漏洞。
+        - label: 本报告不涉及需要私密披露的安全漏洞。
           required: true

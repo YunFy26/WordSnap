@@ -1,67 +1,67 @@
-# AGENTS.md
+# WordSnap 智能体协作规范
 
-This file applies to the entire repository. It is the working contract for coding agents; user instructions always take precedence.
+本文件适用于整个仓库，用于规定编码智能体的工作要求。用户指令的优先级始终高于本文件。
 
-## Read first
+## 前置阅读
 
-- `README.md` — current product behavior, setup, commands, and architecture map.
-- `CONTRIBUTING.md` — contribution workflow, code expectations, and product scope.
-- `SECURITY.md` and `docs/PRIVACY.md` — security reporting and data-flow constraints.
-- `docs/RELEASE.md` — packaging, versioning, and unsigned-release behavior.
+- `README.md`：说明当前产品行为、环境配置、常用命令和项目结构。
+- `CONTRIBUTING.md`：说明贡献流程、代码要求和产品范围。
+- `SECURITY.md` 与 `docs/PRIVACY.md`：说明安全报告流程和数据处理限制。
+- `docs/RELEASE.md`：说明打包、版本管理和未签名发布包的行为。
 
-Treat the implementation in `src/` and `src-tauri/` as the source of truth. Files under `design/` are visual references, not production code or an authoritative specification.
+`src/` 和 `src-tauri/` 中的实现是判断产品行为的主要依据。`design/` 中的文件仅作为视觉参考，不属于生产代码，也不构成权威规格。
 
-## Product invariants
+## 产品约束
 
-- WordSnap is a small Tauri 2 selection-translation utility, not a general dictionary or learning platform.
-- `Option+T` on macOS and `Alt+T` elsewhere capture copyable selected text and show a nearby translation popup.
-- Foreign-language input is translated to the configured target language. Simplified Chinese input is translated into English for quick expression drafting.
-- Only a single ASCII English word, with an optional hyphen, may be written to the SQLite word list. Phrases, sentences, Chinese text, and failed translations must not be recorded.
-- Repeated word lookups update the existing row, increment `count`, refresh `last_seen_at`, and replace the stored translation.
-- Preserve and restore the user's clipboard as faithfully as the platform permits. Clipboard changes, selection capture, and simulated keyboard input require platform-specific verification.
-- On macOS the app behaves as a menu-bar utility and must not gain a normal Dock presence.
-- Keep the v1 scope narrow. Do not add OCR, screenshot translation, search, tags, export, editing, review systems, or additional translation backends without explicit approval.
+- WordSnap 是一款基于 Tauri 2 的轻量划词翻译工具，不是通用词典或语言学习平台。
+- 在 macOS 上按 `Option+T`，在其他平台上按 `Alt+T`，可以读取可复制的选中文本，并在选区附近显示翻译浮窗。
+- 外语输入会翻译为用户配置的目标语言；简体中文输入会翻译为英文，以便快速组织英文表达。
+- 只有单个 ASCII 英文单词可以写入 SQLite 词表，单词中可以包含连字符。短语、句子、中文文本和翻译失败的内容不得写入词表。
+- 重复查询同一单词时，应更新现有记录，增加 `count`，刷新 `last_seen_at`，并替换已保存的译文。
+- 应在平台能力允许的范围内完整保存并恢复用户剪贴板。修改剪贴板、读取选区和模拟键盘输入的变更必须按平台进行验证。
+- 在 macOS 上，应用应保持菜单栏工具的运行方式，不得显示普通 Dock 图标。
+- 第一版的产品范围应保持有限。未经明确批准，不得增加 OCR、截图翻译、搜索、标签、导出、编辑、复习系统或其他翻译后端。
 
-## Code map
+## 代码结构
 
-- `src-tauri/src/lib.rs` — application state, global shortcut, selection/clipboard capture, translation request, SQLite storage, windows, tray, and Tauri commands.
-- `src/main.ts` — view routing, float/word/settings/menu rendering, frontend events, and browser mock data.
-- `src/styles.css` — all production UI styling and light/dark behavior.
-- `src-tauri/tauri.conf.json` — window definitions, bundle metadata, and Tauri security configuration.
-- `src-tauri/capabilities/default.json` — allowed frontend capabilities.
-- `.github/workflows/ci.yml` and `.github/workflows/release.yml` — validation and packaging automation.
+- `src-tauri/src/lib.rs`：应用状态、全局快捷键、选区与剪贴板读取、翻译请求、SQLite 存储、窗口、托盘和 Tauri 命令。
+- `src/main.ts`：视图路由、翻译浮窗、词表、设置、菜单、前端事件和浏览器模拟数据。
+- `src/styles.css`：生产界面的全部样式及浅色、深色主题行为。
+- `src-tauri/tauri.conf.json`：窗口定义、打包元数据和 Tauri 安全配置。
+- `src-tauri/capabilities/default.json`：前端可使用的 Tauri 权限。
+- `.github/workflows/ci.yml` 与 `.github/workflows/release.yml`：验证和打包自动化流程。
 
-Most backend behavior is intentionally concentrated in `src-tauri/src/lib.rs`. Prefer small focused helpers and tests over introducing a new abstraction layer for a one-off change.
+后端行为有意集中在 `src-tauri/src/lib.rs` 中。对于一次性变更，应优先增加小型、职责明确的辅助函数和测试，不应引入新的抽象层。
 
-## Working rules
+## 工作要求
 
-1. Start with `git status --short --branch`. Preserve all pre-existing edits and never reformat, revert, stage, or commit unrelated work.
-2. Inspect the actual call path before changing behavior. Keep Rust payload fields and TypeScript camelCase interfaces synchronized.
-3. Add or update tests for pure logic and regressions. For shortcut, window, clipboard, tray, and positioning work, also document manual verification and the tested OS.
-4. Never commit API keys, real selected text, personal databases, app-data files, or unredacted logs/screenshots.
-5. Do not log full API keys or selected text. Remote services should use HTTPS; plain HTTP is only appropriate for an explicitly local development endpoint.
-6. If storage, network requests, clipboard behavior, or Tauri permissions change, update `docs/PRIVACY.md` or `SECURITY.md` in the same change.
-7. If user-visible behavior, setup, commands, or limitations change, update `README.md`. Keep durable process detail in the dedicated docs rather than duplicating it here.
-8. Keep `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` versions aligned for a named release.
-9. Do not change release triggers, artifact naming, signing expectations, or supported-platform claims without checking `docs/RELEASE.md` and updating it together.
+1. 开始工作前运行 `git status --short --branch`。保留所有已有改动，不得格式化、撤销、暂存或提交无关内容。
+2. 修改行为前检查实际调用路径，并保持 Rust 载荷字段与 TypeScript 驼峰命名接口同步。
+3. 对纯逻辑和回归问题增加或更新测试。涉及快捷键、窗口、剪贴板、托盘和定位时，还应记录手动验证步骤和测试平台。
+4. 不得提交 API Key、真实选中文本、个人数据库、应用数据文件，以及未经脱敏的日志或截图。
+5. 不得记录完整 API Key 或选中文本。远程服务应使用 HTTPS；只有明确的本机开发接口适合使用 HTTP。
+6. 如果本地存储、网络请求、剪贴板行为或 Tauri 权限发生变化，应在同一变更中更新 `docs/PRIVACY.md` 或 `SECURITY.md`。
+7. 如果用户可见行为、环境配置、命令或限制发生变化，应更新 `README.md`。长期有效的流程说明应保存在相应的专用文档中，不应在本文件中重复。
+8. 准备具名版本时，应保持 `package.json`、`src-tauri/Cargo.toml` 和 `src-tauri/tauri.conf.json` 中的版本一致。
+9. 修改发布触发条件、产物命名、签名要求或支持平台声明前，应检查并同步更新 `docs/RELEASE.md`。
 
-## Commands
+## 常用命令
 
 ```bash
-npm ci                 # install the locked frontend/Tauri toolchain
-npm run tauri dev      # run the complete desktop app
-npm run dev            # browser-only UI preview with mock data
-npm run check          # TypeScript/Vite build + rustfmt + Clippy + Rust tests
-npm run audit          # npm vulnerability audit via the official registry
-npm run tauri build    # package the current platform; run only when needed
+npm ci                 # 安装锁定版本的前端和 Tauri 工具链
+npm run tauri dev      # 启动完整桌面应用
+npm run dev            # 使用模拟数据启动浏览器界面预览
+npm run check          # 运行前端构建、Rust 格式检查、Clippy 和 Rust 测试
+npm run audit          # 通过 npm 官方软件源执行依赖漏洞审计
+npm run tauri build    # 为当前平台打包应用，仅在必要时运行
 ```
 
-`npm run check` is the required baseline before handoff. Dependency changes also require `npm run audit`. Do not claim desktop behavior is verified from the browser mock alone.
+交付前必须通过 `npm run check`。依赖发生变化时，还必须运行 `npm run audit`。仅验证浏览器模拟界面时，不得声称已经验证桌面应用行为。
 
-## Definition of done
+## 完成条件
 
-- The requested behavior is implemented without expanding the agreed product scope.
-- `npm run check` passes.
-- Relevant manual platform checks are recorded, or the lack of platform verification is stated clearly.
-- Documentation and privacy/security disclosures match the final code.
-- `git diff --check` passes, and the final diff contains no unrelated or generated files.
+- 已实现请求的行为，且未扩大约定的产品范围。
+- `npm run check` 通过。
+- 已记录相关平台的手动验证结果，或明确说明尚未完成平台验证。
+- 文档、隐私说明和安全说明与最终代码一致。
+- `git diff --check` 通过，最终差异中不包含无关文件或生成文件。

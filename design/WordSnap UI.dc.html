@@ -21,7 +21,7 @@ body{margin:0;background:#e9e7e2;font-family:-apple-system,BlinkMacSystemFont,"S
 <div class="dv-wrap">
 <div class="dv-card" data-screen-label="WordSnap" style="width:1000px;max-width:100%;position:relative;background:radial-gradient(120% 90% at 20% 0%,#cdd3df 0%,#bcc2d1 46%,#adb4c8 100%);border-radius:16px;overflow:hidden;box-shadow:0 2px 4px rgba(0,0,0,.05)">
 
-  <!-- faux macOS menu bar -->
+  <!-- macOS 菜单栏视觉示意 -->
   <div style="height:26px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:rgba(255,255,255,.5);backdrop-filter:blur(24px) saturate(1.6);-webkit-backdrop-filter:blur(24px) saturate(1.6);border-bottom:.5px solid rgba(0,0,0,.07);position:relative;z-index:5">
     <div style="display:flex;align-items:center;gap:16px;font-size:13px;color:#1c1c1e">
       <span style="font-size:14px"></span>
@@ -32,7 +32,7 @@ body{margin:0;background:#e9e7e2;font-family:-apple-system,BlinkMacSystemFont,"S
     </div>
     <div style="display:flex;align-items:center;gap:14px;color:rgba(0,0,0,.6);font-size:12.5px">
       <span style="width:15px;height:9px;border:1.4px solid rgba(0,0,0,.55);border-radius:2px;position:relative"></span>
-      <!-- highlighted WordSnap menubar extra -->
+      <!-- 高亮显示的 WordSnap 菜单栏图标 -->
       <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:20px;border-radius:5px;background:oklch(0.55 0.13 250);box-shadow:0 1px 2px rgba(0,0,0,.2)">
         <span style="width:9px;height:2px;border-radius:1px;background:#fff;box-shadow:0 3px 0 rgba(255,255,255,.6)"></span>
       </span>
@@ -40,7 +40,7 @@ body{margin:0;background:#e9e7e2;font-family:-apple-system,BlinkMacSystemFont,"S
     </div>
   </div>
 
-  <!-- menubar dropdown -->
+  <!-- 菜单栏下拉菜单 -->
   <div style="position:absolute;top:30px;right:64px;width:228px;z-index:6;border-radius:9px;background:rgba(246,246,248,.72);backdrop-filter:blur(40px) saturate(1.8);-webkit-backdrop-filter:blur(40px) saturate(1.8);border:.5px solid rgba(0,0,0,.08);box-shadow:0 18px 46px -10px rgba(15,18,28,.4);padding:5px;font-size:13px;color:#1c1c1e">
     <div style="display:flex;align-items:center;gap:8px;padding:7px 9px 8px">
       <span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;background:linear-gradient(160deg,oklch(0.62 0.13 250),oklch(0.49 0.13 255))">
@@ -55,15 +55,15 @@ body{margin:0;background:#e9e7e2;font-family:-apple-system,BlinkMacSystemFont,"S
     <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 9px;border-radius:6px"><span>退出 WordSnap</span><span style="color:rgba(0,0,0,.4);font-size:12px">⌘Q</span></div>
   </div>
 
-  <!-- body -->
+  <!-- 主体内容 -->
   <div style="padding:32px 36px 40px;display:flex;flex-direction:column;gap:36px">
 
-    <!-- FLOATS -->
+    <!-- 翻译浮窗 -->
     <div>
       <span class="dv-cap">划词翻译浮窗 · 四种状态</span>
       <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start">
 
-        <!-- A: word recorded (with selection context) -->
+        <!-- 状态 A：已记录单词，并显示选区上下文 -->
         <div style="display:flex;flex-direction:column;gap:11px;width:300px">
           <div style="font-size:13.5px;color:#48484a;line-height:1.75">Update the <span style="background:oklch(0.7 0.12 250 / .48);color:#12213f;border-radius:3px;padding:1px 3px;box-shadow:0 0 0 1px oklch(0.55 0.12 250 / .35)">manifest</span> before shipping the build.</div>
           <div style="position:relative;border-radius:16px;background:rgba(250,250,252,.8);backdrop-filter:blur(40px) saturate(1.7);-webkit-backdrop-filter:blur(40px) saturate(1.7);border:.5px solid rgba(0,0,0,.09);box-shadow:0 22px 52px -14px rgba(15,18,28,.42);padding:15px 17px 14px">
@@ -77,7 +77,7 @@ body{margin:0;background:#e9e7e2;font-family:-apple-system,BlinkMacSystemFont,"S
           </div>
         </div>
 
-        <!-- B: sentence, not recorded -->
+        <!-- 状态 B：整句翻译，不写入词表 -->
         <div style="width:336px;align-self:flex-end;border-radius:16px;background:rgba(250,250,252,.8);backdrop-filter:blur(40px) saturate(1.7);-webkit-backdrop-filter:blur(40px) saturate(1.7);border:.5px solid rgba(0,0,0,.09);box-shadow:0 22px 52px -14px rgba(15,18,28,.42);padding:15px 17px 14px">
           <div style="font-size:13.5px;line-height:1.45;color:#5a5a5e">The manifest declares which files are bundled.</div>
           <div style="margin-top:10px;font-size:15.5px;line-height:1.55;color:#1c1c1e">清单声明了哪些文件会被打包。</div>
@@ -87,7 +87,7 @@ body{margin:0;background:#e9e7e2;font-family:-apple-system,BlinkMacSystemFont,"S
           </div>
         </div>
 
-        <!-- C: loading -->
+        <!-- 状态 C：正在加载 -->
         <div style="width:250px;align-self:flex-start;border-radius:16px;background:rgba(250,250,252,.8);backdrop-filter:blur(40px) saturate(1.7);-webkit-backdrop-filter:blur(40px) saturate(1.7);border:.5px solid rgba(0,0,0,.09);box-shadow:0 22px 52px -14px rgba(15,18,28,.42);padding:15px 17px 14px">
           <div style="font-size:17px;font-weight:600;color:#1c1c1e;letter-spacing:-.01em">resilient</div>
           <div style="margin-top:11px;display:flex;align-items:center;gap:9px">
@@ -96,7 +96,7 @@ body{margin:0;background:#e9e7e2;font-family:-apple-system,BlinkMacSystemFont,"S
           </div>
         </div>
 
-        <!-- D: error -->
+        <!-- 状态 D：翻译失败 -->
         <div style="width:280px;align-self:flex-start;border-radius:16px;background:rgba(250,250,252,.8);backdrop-filter:blur(40px) saturate(1.7);-webkit-backdrop-filter:blur(40px) saturate(1.7);border:.5px solid rgba(0,0,0,.09);box-shadow:0 22px 52px -14px rgba(15,18,28,.42);padding:15px 17px 14px">
           <div style="font-size:17px;font-weight:600;color:#1c1c1e;letter-spacing:-.01em">throughput</div>
           <div style="margin-top:10px;display:flex;align-items:flex-start;gap:8px">
@@ -109,10 +109,10 @@ body{margin:0;background:#e9e7e2;font-family:-apple-system,BlinkMacSystemFont,"S
       </div>
     </div>
 
-    <!-- WORD LIST + SETTINGS -->
+    <!-- 词表窗口和设置窗口 -->
     <div style="display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start">
 
-      <!-- word list window -->
+      <!-- 词表窗口 -->
       <div data-screen-label="词表" style="width:396px;border-radius:12px;overflow:hidden;background:rgba(252,252,253,.86);backdrop-filter:blur(40px) saturate(1.6);-webkit-backdrop-filter:blur(40px) saturate(1.6);border:.5px solid rgba(0,0,0,.09);box-shadow:0 24px 56px -16px rgba(15,18,28,.4)">
         <div style="height:38px;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:.5px solid rgba(0,0,0,.06);position:relative">
           <span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span>
@@ -132,7 +132,7 @@ body{margin:0;background:#e9e7e2;font-family:-apple-system,BlinkMacSystemFont,"S
         <div style="padding:9px 16px;border-top:.5px solid rgba(0,0,0,.06);font-size:11.5px;color:rgba(0,0,0,.4)">共 128 个单词</div>
       </div>
 
-      <!-- settings window -->
+      <!-- 设置窗口 -->
       <div data-screen-label="设置" style="width:378px;border-radius:12px;overflow:hidden;background:rgba(252,252,253,.86);backdrop-filter:blur(40px) saturate(1.6);-webkit-backdrop-filter:blur(40px) saturate(1.6);border:.5px solid rgba(0,0,0,.09);box-shadow:0 24px 56px -16px rgba(15,18,28,.4)">
         <div style="height:38px;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:.5px solid rgba(0,0,0,.06);position:relative">
           <span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span>

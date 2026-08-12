@@ -1,9 +1,10 @@
 use std::{
-    fs,
+    fs::{self, File, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
-    sync::{mpsc, Mutex},
+    sync::{mpsc, Mutex, OnceLock},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -40,6 +41,138 @@ use tauri_nspanel::{
 };
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
+static APP_LOG: OnceLock<Mutex<AppLogger>> = OnceLock::new();
+
+struct AppLogger {
+    file: File,
+}
+
+#[derive(Clone, Copy)]
+enum LogLevel {
+    Debug,
+    Info,
+    Error,
+}
+
+impl LogLevel {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Debug => "DEBUG",
+            Self::Info => "INFO",
+            Self::Error => "ERROR",
+        }
+    }
+}
+
+impl AppLogger {
+    fn new(directory: PathBuf) -> Result<Self> {
+        let started_at = Local::now().format("%Y-%m-%d_%H-%M-%S%.3f").to_string();
+        Self::new_with_identity(directory, &started_at, std::process::id())
+    }
+
+    fn new_with_identity(directory: PathBuf, started_at: &str, process_id: u32) -> Result<Self> {
+        let path = directory.join(session_log_filename(started_at, process_id));
+        let file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+            .context("failed to create application session log")?;
+        restrict_file_permissions(&path);
+        Ok(Self { file })
+    }
+
+    fn write(&mut self, level: LogLevel, event: &str, details: &str) -> Result<()> {
+        let timestamp = Local::now().to_rfc3339();
+        writeln!(
+            self.file,
+            "{timestamp} {} {event} {}",
+            level.as_str(),
+            sanitize_log_field(details)
+        )?;
+        self.file.flush()?;
+        Ok(())
+    }
+}
+
+fn session_log_filename(started_at: &str, process_id: u32) -> String {
+    format!("{started_at}_pid-{process_id}.log")
+}
+
+fn project_logs_dir() -> Result<PathBuf> {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|root| root.join("logs"))
+        .context("failed to resolve project root directory")
+}
+
+fn init_logging() -> Result<()> {
+    let log_dir = project_logs_dir()?;
+    fs::create_dir_all(&log_dir).context("failed to create project logs directory")?;
+    APP_LOG
+        .set(Mutex::new(AppLogger::new(log_dir)?))
+        .map_err(|_| anyhow!("application logging was initialized more than once"))?;
+    log_event(LogLevel::Info, "app.logging_initialized", "file=session");
+    Ok(())
+}
+
+fn restrict_file_permissions(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if fs::set_permissions(path, fs::Permissions::from_mode(0o600)).is_err() {
+            if APP_LOG.get().is_some() {
+                log_event(
+                    LogLevel::Error,
+                    "storage.file_permission_update_failed",
+                    "result=failed",
+                );
+            } else {
+                eprintln!("failed to restrict permissions for a WordSnap local file");
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
+fn log_event(level: LogLevel, event: &str, details: &str) {
+    let Some(logger) = APP_LOG.get() else {
+        eprintln!("{} {} {}", level.as_str(), event, details);
+        return;
+    };
+    let Ok(mut file) = logger.lock() else {
+        eprintln!("ERROR app.logging_lock_failed");
+        return;
+    };
+    if file.write(level, event, details).is_err() {
+        eprintln!("ERROR app.logging_write_failed");
+    }
+}
+
+fn sanitize_log_field(value: &str) -> String {
+    value
+        .chars()
+        .take(240)
+        .map(|character| {
+            if character.is_ascii_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
+fn log_ignored_error<T, E>(result: std::result::Result<T, E>, event: &str) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(_) => {
+            log_event(LogLevel::Error, event, "result=failed");
+            None
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 tauri_panel! {
     panel!(WordSnapFloatPanel {
@@ -56,8 +189,8 @@ tauri_panel! {
 
 #[cfg(target_os = "macos")]
 thread_local! {
-    // AppKit owns the monitors until they are explicitly removed. Keeping the
-    // returned tokens on the main thread makes their lifetime match the app.
+    // AppKit 持有事件监听器，直至监听器被显式移除。将返回的令牌保存在主线程中，
+    // 可以使监听器的生命周期与应用生命周期一致。
     static MAC_FLOAT_CLICK_MONITORS: std::cell::RefCell<Vec<MacRetained<MacAnyObject>>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -66,9 +199,8 @@ struct AppState {
     conn: Mutex<Connection>,
     settings: Mutex<StoredSettings>,
     float: Mutex<FloatPayload>,
-    /// Screen point (logical) the float should anchor to. Captured once when a
-    /// translation is triggered so the popup stays put across loading/result/
-    /// retry redraws instead of jumping to wherever the cursor now is.
+    /// 翻译浮窗的逻辑坐标锚点。触发翻译时只记录一次，使浮窗在加载、显示结果和重试
+    /// 期间保持原位，不随鼠标的后续移动改变位置。
     anchor: Mutex<(i32, i32)>,
     client: Client,
 }
@@ -80,8 +212,8 @@ struct StoredSettings {
     model: String,
     hotkey: String,
     target_lang: String,
-    // Stored in this app's own settings.json (owner-only readable), not the
-    // system keychain, so saving a key never triggers a macOS permission prompt.
+    // API Key 保存在应用自身的 settings.json 中，文件权限限制为仅所有者可读，
+    // 不使用系统密钥库，因此保存密钥不会触发 macOS 权限提示。
     api_key: String,
 }
 
@@ -179,29 +311,59 @@ impl AppState {
         fs::create_dir_all(&app_dir).context("failed to create app data directory")?;
 
         let settings = load_settings(&app_dir)?;
+        log_event(
+            LogLevel::Info,
+            "settings.loaded",
+            if settings.api_key.trim().is_empty() {
+                "api_key_set=false"
+            } else {
+                "api_key_set=true"
+            },
+        );
         let conn = Connection::open(app_dir.join("wordsnap.sqlite3"))
             .context("failed to open WordSnap SQLite database")?;
         init_db(&conn)?;
+
+        let client = match Client::builder()
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(45))
+            .build()
+        {
+            Ok(client) => client,
+            Err(_) => {
+                log_event(
+                    LogLevel::Error,
+                    "network.client_configuration_failed",
+                    "fallback=default_client",
+                );
+                Client::new()
+            }
+        };
+        log_event(LogLevel::Info, "database.initialized", "result=success");
 
         Ok(Self {
             conn: Mutex::new(conn),
             settings: Mutex::new(settings),
             float: Mutex::new(FloatPayload::default()),
             anchor: Mutex::new((0, 0)),
-            // Fail fast on an unreachable host (common when the base URL points at
-            // a blocked/wrong endpoint) instead of hanging on the spinner.
-            client: Client::builder()
-                .connect_timeout(Duration::from_secs(8))
-                .timeout(Duration::from_secs(45))
-                .build()
-                .unwrap_or_else(|_| Client::new()),
+            // Base URL 指向被阻止或错误的端点时，主机通常无法连接。连接超时用于尽快
+            // 返回错误，避免界面长时间停留在加载状态。
+            client,
         })
     }
 }
 
 #[tauri::command]
 fn get_settings(state: State<'_, AppState>) -> Result<SettingsPayload, String> {
-    let settings = state.settings.lock().map_err(lock_err)?.clone();
+    log_event(LogLevel::Debug, "settings.read_started", "source=command");
+    let settings = state
+        .settings
+        .lock()
+        .map_err(|error| {
+            log_event(LogLevel::Error, "settings.read_failed", "reason=state_lock");
+            lock_err(error)
+        })?
+        .clone();
     Ok(settings_payload(settings))
 }
 
@@ -211,8 +373,16 @@ fn save_settings(
     state: State<'_, AppState>,
     request: SaveSettingsRequest,
 ) -> Result<SettingsPayload, String> {
-    // Keep the previously saved key unless the user typed a new one.
-    let existing_key = state.settings.lock().map_err(lock_err)?.api_key.clone();
+    // 用户未输入新密钥时，保留先前保存的 API Key。
+    let current = state
+        .settings
+        .lock()
+        .map_err(|error| {
+            log_event(LogLevel::Error, "settings.save_failed", "reason=state_lock");
+            lock_err(error)
+        })?
+        .clone();
+    let existing_key = current.api_key.clone();
     let mut next = StoredSettings {
         base_url: normalize_base_url(&request.base_url),
         model: request.model.trim().to_string(),
@@ -238,15 +408,57 @@ fn save_settings(
         }
     }
 
-    let app_dir = app_data_dir(&app).map_err(to_string)?;
-    save_settings_file(&app_dir, &next).map_err(to_string)?;
-    *state.settings.lock().map_err(lock_err)? = next.clone();
+    let change_summary = format!(
+        "base_url_changed={} model_changed={} target_lang_changed={} api_key_replaced={} transport={}",
+        current.base_url != next.base_url,
+        current.model != next.model,
+        current.target_lang != next.target_lang,
+        current.api_key != next.api_key,
+        if next.base_url.starts_with("https://") {
+            "https"
+        } else {
+            "http_or_other"
+        }
+    );
+    let app_dir = app_data_dir(&app).map_err(|error| {
+        log_event(
+            LogLevel::Error,
+            "settings.save_failed",
+            "reason=app_data_path",
+        );
+        to_string(error)
+    })?;
+    save_settings_file(&app_dir, &next).map_err(|error| {
+        log_event(LogLevel::Error, "settings.save_failed", "reason=file_write");
+        to_string(error)
+    })?;
+    *state.settings.lock().map_err(|error| {
+        log_event(
+            LogLevel::Error,
+            "settings.save_failed",
+            "reason=state_lock_update",
+        );
+        lock_err(error)
+    })? = next.clone();
+    log_event(LogLevel::Info, "settings.saved", &change_summary);
     Ok(settings_payload(next))
 }
 
 #[tauri::command]
 fn list_words(state: State<'_, AppState>) -> Result<WordListPayload, String> {
-    read_words(&state).map_err(to_string)
+    log_event(LogLevel::Debug, "words.list_started", "source=command");
+    read_words(&state)
+        .inspect(|payload| {
+            log_event(
+                LogLevel::Debug,
+                "words.list_completed",
+                &format!("total={}", payload.total),
+            );
+        })
+        .map_err(|error| {
+            log_event(LogLevel::Error, "words.list_failed", "result=failed");
+            to_string(error)
+        })
 }
 
 #[tauri::command]
@@ -257,13 +469,60 @@ fn remove_word(
 ) -> Result<WordListPayload, String> {
     let normalized = word.trim().to_lowercase();
     if normalized.is_empty() {
+        log_event(
+            LogLevel::Error,
+            "words.remove_rejected",
+            "reason=empty_input",
+        );
         return Err("单词不能为空。".to_string());
     }
 
-    delete_word(&state, &normalized).map_err(to_string)?;
-    let payload = read_words(&state).map_err(to_string)?;
-    let _ = app.emit("words-updated", ());
+    delete_word(&state, &normalized).map_err(|error| {
+        log_event(LogLevel::Error, "words.remove_failed", "result=failed");
+        to_string(error)
+    })?;
+    let payload = read_words(&state).map_err(|error| {
+        log_event(LogLevel::Error, "words.list_failed", "after=remove");
+        to_string(error)
+    })?;
+    log_ignored_error(app.emit("words-updated", ()), "words.update_event_failed");
+    log_event(LogLevel::Info, "words.removed", "result=success");
     Ok(payload)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum FrontendLogLevel {
+    Debug,
+    Info,
+    Error,
+}
+
+#[tauri::command]
+fn report_frontend_event(level: FrontendLogLevel, event: String) {
+    let allowed = [
+        "frontend.initialized",
+        "frontend.command_completed",
+        "frontend.command_failed",
+        "frontend.event_listener_failed",
+        "frontend.render_failed",
+        "frontend.unhandled_error",
+        "frontend.unhandled_rejection",
+    ];
+    if allowed.contains(&event.as_str()) {
+        let level = match level {
+            FrontendLogLevel::Debug => LogLevel::Debug,
+            FrontendLogLevel::Info => LogLevel::Info,
+            FrontendLogLevel::Error => LogLevel::Error,
+        };
+        log_event(level, &event, "source=webview");
+    } else {
+        log_event(
+            LogLevel::Error,
+            "frontend.log_event_rejected",
+            "reason=unknown_event",
+        );
+    }
 }
 
 #[tauri::command]
@@ -271,7 +530,14 @@ fn current_float(state: State<'_, AppState>) -> Result<FloatPayload, String> {
     state
         .float
         .lock()
-        .map_err(lock_err)
+        .map_err(|error| {
+            log_event(
+                LogLevel::Error,
+                "window.float_state_read_failed",
+                "reason=state_lock",
+            );
+            lock_err(error)
+        })
         .map(|payload| payload.clone())
 }
 
@@ -279,41 +545,77 @@ fn current_float(state: State<'_, AppState>) -> Result<FloatPayload, String> {
 fn show_words(app: AppHandle) -> Result<(), String> {
     hide_menu_window(&app);
     show_window(&app, "words")
+        .inspect(|_| {
+            log_event(LogLevel::Info, "window.words_shown", "result=success");
+        })
+        .inspect_err(|_| {
+            log_event(LogLevel::Error, "window.words_show_failed", "result=failed");
+        })
 }
 
 #[tauri::command]
 fn show_settings(app: AppHandle) -> Result<(), String> {
     hide_menu_window(&app);
-    show_window(&app, "settings")?;
-    // The settings webview is created once and reused, so nudge it to reload its
-    // fields every time it opens instead of showing whatever state it was left in.
+    show_window(&app, "settings").inspect_err(|_| {
+        log_event(
+            LogLevel::Error,
+            "window.settings_show_failed",
+            "result=failed",
+        );
+    })?;
+    // 设置 WebView 只创建一次并重复使用。每次打开时通知其重新加载字段，避免显示
+    // 上一次关闭窗口时遗留的状态。
     if let Some(window) = app.get_webview_window("settings") {
-        let _ = window.emit("settings-refresh", ());
+        log_ignored_error(
+            window.emit("settings-refresh", ()),
+            "settings.refresh_event_failed",
+        );
     }
+    log_event(LogLevel::Info, "window.settings_shown", "result=success");
     Ok(())
 }
 
 #[tauri::command]
 fn hide_menu(app: AppHandle) {
+    log_event(
+        LogLevel::Debug,
+        "window.menu_hide_requested",
+        "source=command",
+    );
     hide_menu_window(&app);
 }
 
 #[tauri::command]
 fn hide_settings(app: AppHandle) {
+    log_event(
+        LogLevel::Debug,
+        "window.settings_hide_requested",
+        "source=command",
+    );
     if let Some(window) = app.get_webview_window("settings") {
-        let _ = window.hide();
+        log_ignored_error(window.hide(), "window.settings_hide_failed");
     }
 }
 
 #[tauri::command]
 fn hide_float(app: AppHandle) {
+    log_event(
+        LogLevel::Debug,
+        "window.float_hide_requested",
+        "source=command",
+    );
     if let Some(window) = app.get_webview_window("float") {
-        let _ = window.hide();
+        log_ignored_error(window.hide(), "window.float_hide_failed");
     }
 }
 
 #[tauri::command]
 fn resize_float(app: AppHandle, width: u32, height: u32) -> Result<(), String> {
+    log_event(
+        LogLevel::Debug,
+        "window.float_resize_requested",
+        &format!("width={width} height={height}"),
+    );
     let window = app
         .get_webview_window("float")
         .ok_or_else(|| "float window not found".to_string())?;
@@ -323,19 +625,23 @@ fn resize_float(app: AppHandle, width: u32, height: u32) -> Result<(), String> {
         .set_size(LogicalSize::new(width, height))
         .map_err(to_string)?;
 
-    // The card may measure taller than the backend's initial guess; re-clamp the
-    // origin against the real size so it never grows off the bottom of the screen.
+    // 卡片实际高度可能超过后端初始估计值。根据实际尺寸重新限制原点，避免卡片超出
+    // 屏幕底部。
     let (anchor_x, anchor_y) = app
         .try_state::<AppState>()
         .and_then(|state| state.anchor.lock().ok().map(|anchor| *anchor))
         .unwrap_or((620, 260));
     let (x, y) = float_origin(&window, anchor_x as f64, anchor_y as f64, width, height);
-    let _ = window.set_position(LogicalPosition::new(x, y));
+    log_ignored_error(
+        window.set_position(LogicalPosition::new(x, y)),
+        "window.float_position_failed",
+    );
     Ok(())
 }
 
 #[tauri::command]
 fn quit_app(app: AppHandle) {
+    log_event(LogLevel::Info, "app.quit_requested", "source=command");
     app.exit(0);
 }
 
@@ -345,6 +651,11 @@ async fn translate_text(
     state: State<'_, AppState>,
     text: String,
 ) -> Result<FloatPayload, String> {
+    log_event(
+        LogLevel::Info,
+        "translation.manual_requested",
+        &format!("text_chars={}", text.chars().count()),
+    );
     let anchor = cursor_position_on_main(&app);
     if let Ok(mut stored) = state.anchor.lock() {
         *stored = anchor;
@@ -368,9 +679,19 @@ async fn retry_translation(
         .to_string();
 
     if original.is_empty() {
+        log_event(
+            LogLevel::Error,
+            "translation.retry_rejected",
+            "reason=no_text",
+        );
         return Err("没有可重试的文本。".to_string());
     }
 
+    log_event(
+        LogLevel::Info,
+        "translation.retry_requested",
+        "result=started",
+    );
     translate_selection(app, state.inner(), original)
         .await
         .map_err(to_string)
@@ -382,36 +703,81 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
 
-    builder
+    let run_result = builder
         .setup(|app| {
+            init_logging()?;
+            log_event(
+                LogLevel::Info,
+                "app.starting",
+                &format!(
+                    "version={} platform={}",
+                    env!("CARGO_PKG_VERSION"),
+                    std::env::consts::OS
+                ),
+            );
             #[cfg(target_os = "macos")]
             {
                 app.handle()
                     .set_activation_policy(tauri::ActivationPolicy::Accessory)?;
                 app.handle().set_dock_visibility(false)?;
+                log_event(LogLevel::Info, "app.macos_accessory_mode", "result=success");
             }
 
-            let state = AppState::new(app.handle())?;
-            let should_show_settings = state
-                .settings
-                .lock()
-                .map(|settings| settings.api_key.trim().is_empty())
-                .unwrap_or(true);
+            let state = AppState::new(app.handle()).inspect_err(|_| {
+                log_event(
+                    LogLevel::Error,
+                    "app.state_initialization_failed",
+                    "result=failed",
+                );
+            })?;
+            let should_show_settings = match state.settings.lock() {
+                Ok(settings) => settings.api_key.trim().is_empty(),
+                Err(_) => {
+                    log_event(
+                        LogLevel::Error,
+                        "settings.initial_state_read_failed",
+                        "fallback=open_settings",
+                    );
+                    true
+                }
+            };
 
             app.manage(state);
             #[cfg(target_os = "macos")]
             {
-                configure_macos_float_window(app.handle())?;
-                setup_macos_float_click_monitor(app.handle())?;
+                configure_macos_float_window(app.handle()).inspect_err(|_| {
+                    log_event(
+                        LogLevel::Error,
+                        "window.macos_panel_setup_failed",
+                        "result=failed",
+                    );
+                })?;
+                setup_macos_float_click_monitor(app.handle()).inspect_err(|_| {
+                    log_event(
+                        LogLevel::Error,
+                        "input.macos_click_monitor_setup_failed",
+                        "result=failed",
+                    );
+                })?;
             }
             setup_window_events(app);
-            setup_tray(app)?;
-            setup_global_shortcut(app)?;
+            setup_tray(app).inspect_err(|_| {
+                log_event(LogLevel::Error, "tray.setup_failed", "result=failed");
+            })?;
+            setup_global_shortcut(app).inspect_err(|_| {
+                log_event(LogLevel::Error, "hotkey.setup_failed", "result=failed");
+            })?;
 
             if should_show_settings {
+                log_event(
+                    LogLevel::Info,
+                    "settings.api_key_missing",
+                    "action=open_settings",
+                );
                 show_settings(app.handle().clone()).map_err(anyhow::Error::msg)?;
             }
 
+            log_event(LogLevel::Info, "app.ready", "result=success");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -423,6 +789,7 @@ pub fn run() {
             list_words,
             remove_word,
             quit_app,
+            report_frontend_event,
             resize_float,
             retry_translation,
             save_settings,
@@ -430,8 +797,13 @@ pub fn run() {
             show_words,
             translate_text
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!());
+
+    match &run_result {
+        Ok(()) => log_event(LogLevel::Info, "app.stopped", "result=success"),
+        Err(_) => log_event(LogLevel::Error, "app.stopped", "result=runtime_error"),
+    }
+    run_result.expect("error while running tauri application");
 }
 
 fn setup_global_shortcut(app: &mut tauri::App) -> Result<()> {
@@ -442,9 +814,19 @@ fn setup_global_shortcut(app: &mut tauri::App) -> Result<()> {
         tauri_plugin_global_shortcut::Builder::new()
             .with_handler(move |app, shortcut, event| {
                 if shortcut == &registered_shortcut && event.state() == ShortcutState::Pressed {
+                    log_event(
+                        LogLevel::Info,
+                        "hotkey.pressed",
+                        "action=translate_selection",
+                    );
                     let app = app.clone();
                     tauri::async_runtime::spawn(async move {
                         if let Err(error) = process_hotkey(app.clone()).await {
+                            log_event(
+                                LogLevel::Error,
+                                "hotkey.processing_failed",
+                                &format!("category={}", hotkey_error_category(&error)),
+                            );
                             show_error_float(&app, "无法读取选区", friendly_hotkey_error(&error));
                         }
                     });
@@ -454,6 +836,7 @@ fn setup_global_shortcut(app: &mut tauri::App) -> Result<()> {
     )?;
 
     app.global_shortcut().register(shortcut)?;
+    log_event(LogLevel::Info, "hotkey.registered", "shortcut=Alt+T");
     Ok(())
 }
 
@@ -466,9 +849,8 @@ fn configure_macos_float_window(app: &AppHandle) -> Result<()> {
         .to_panel::<WordSnapFloatPanel>()
         .context("failed to convert the macOS float window to an NSPanel")?;
 
-    // A normal NSWindow cannot reliably appear over another application's
-    // native full-screen Space while WordSnap stays inactive. NSPanel plus the
-    // non-activating style is the AppKit pattern used by Spotlight-like tools.
+    // WordSnap 保持非活动状态时，普通 NSWindow 无法可靠显示在其他应用的原生全屏
+    // Space 上方。采用 NSPanel 和非激活样式，符合 Spotlight 类工具的 AppKit 实现方式。
     panel.set_level(PanelLevel::Floating.value());
     panel.set_style_mask(StyleMask::empty().nonactivating_panel().into());
     panel.set_floating_panel(true);
@@ -483,9 +865,8 @@ fn configure_macos_float_window(app: &AppHandle) -> Result<()> {
             .into(),
     );
 
-    // Fail fast if AppKit rejects any of the properties needed to share a
-    // native full-screen Space. This keeps future dependency/macOS changes
-    // from silently degrading back to the old invisible-window behavior.
+    // 如果 AppKit 拒绝共享原生全屏 Space 所需的任一属性，应立即返回错误，避免未来的
+    // 依赖或 macOS 变更使窗口在无提示的情况下恢复为不可见状态。
     let native_panel = panel.as_panel();
     if !native_panel
         .styleMask()
@@ -513,9 +894,18 @@ fn show_float_without_activation(window: &tauri::WebviewWindow) {
     let app = window.app_handle().clone();
     if let Err(error) = window.run_on_main_thread(move || match app.get_webview_panel("float") {
         Ok(panel) => panel.show(),
-        Err(error) => eprintln!("failed to access the macOS translation panel: {error:?}"),
+        Err(_) => log_event(
+            LogLevel::Error,
+            "window.macos_panel_access_failed",
+            "result=failed",
+        ),
     }) {
-        eprintln!("failed to schedule the macOS translation popup: {error}");
+        let _ = error;
+        log_event(
+            LogLevel::Error,
+            "window.float_show_schedule_failed",
+            "result=failed",
+        );
     }
 }
 
@@ -524,8 +914,7 @@ fn setup_macos_float_click_monitor(app: &AppHandle) -> Result<()> {
     let mouse_down_mask =
         NSEventMask::LeftMouseDown | NSEventMask::RightMouseDown | NSEventMask::OtherMouseDown;
 
-    // Global monitors receive clicks delivered to other applications, which
-    // is the common case for a non-activating translation panel.
+    // 全局监听器接收发送至其他应用的点击事件，适用于非激活翻译面板的主要使用场景。
     let app_for_global = app.clone();
     let global_handler = block2::RcBlock::new(move |_event: std::ptr::NonNull<MacNSEvent>| {
         schedule_hide_completed_float(&app_for_global);
@@ -534,9 +923,8 @@ fn setup_macos_float_click_monitor(app: &AppHandle) -> Result<()> {
         MacNSEvent::addGlobalMonitorForEventsMatchingMask_handler(mouse_down_mask, &global_handler)
             .context("failed to install the macOS global click monitor")?;
 
-    // Global monitors intentionally exclude this application. A local monitor
-    // covers clicks on WordSnap's tray/menu/settings windows while preserving
-    // clicks inside the translation card itself.
+    // 全局监听器不会接收当前应用的事件，因此使用本地监听器处理 WordSnap 托盘、菜单和
+    // 设置窗口中的点击，同时保留翻译卡片内部的点击行为。
     let app_for_local = app.clone();
     let local_handler = block2::RcBlock::new(
         move |event: std::ptr::NonNull<MacNSEvent>| -> *mut MacNSEvent {
@@ -567,8 +955,15 @@ fn setup_macos_float_click_monitor(app: &AppHandle) -> Result<()> {
 #[cfg(target_os = "macos")]
 fn schedule_hide_completed_float(app: &AppHandle) {
     let app_for_main = app.clone();
-    if let Err(error) = app.run_on_main_thread(move || hide_completed_float(&app_for_main)) {
-        eprintln!("failed to schedule translation popup dismissal: {error}");
+    if app
+        .run_on_main_thread(move || hide_completed_float(&app_for_main))
+        .is_err()
+    {
+        log_event(
+            LogLevel::Error,
+            "window.float_hide_schedule_failed",
+            "result=failed",
+        );
     }
 }
 
@@ -597,7 +992,7 @@ fn hide_completed_float(app: &AppHandle) {
     }
     #[cfg(not(target_os = "macos"))]
     if let Some(window) = app.get_webview_window("float") {
-        let _ = window.hide();
+        log_ignored_error(window.hide(), "window.float_hide_failed");
     }
 }
 
@@ -620,11 +1015,13 @@ fn setup_tray(app: &mut tauri::App) -> Result<()> {
                 ..
             } = event
             {
+                log_event(LogLevel::Info, "tray.clicked", "button=left");
                 toggle_menu_window(tray.app_handle(), position.x as i32, position.y as i32);
             }
         })
         .build(app)?;
 
+    log_event(LogLevel::Info, "tray.initialized", "result=success");
     Ok(())
 }
 
@@ -634,13 +1031,19 @@ fn tray_template_icon() -> Result<Image<'static>> {
 }
 
 fn setup_window_events(app: &mut tauri::App) {
+    log_event(
+        LogLevel::Debug,
+        "window.event_handlers_setup_started",
+        "result=started",
+    );
     for label in ["words", "settings"] {
         if let Some(window) = app.get_webview_window(label) {
             let window_for_event = window.clone();
             window.on_window_event(move |event| {
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
-                    let _ = window_for_event.hide();
+                    log_ignored_error(window_for_event.hide(), "window.close_hide_failed");
+                    log_event(LogLevel::Info, "window.close_intercepted", "action=hide");
                 }
             });
         }
@@ -656,17 +1059,28 @@ fn setup_window_events(app: &mut tauri::App) {
                     if label_for_event == "float" {
                         hide_completed_float(&app_for_event);
                     } else {
-                        let _ = window_for_event.hide();
+                        log_ignored_error(window_for_event.hide(), "window.focus_loss_hide_failed");
                     }
                 }
             });
         }
     }
+    log_event(
+        LogLevel::Debug,
+        "window.event_handlers_setup_completed",
+        "result=success",
+    );
 }
 
 async fn process_hotkey(app: AppHandle) -> Result<()> {
-    // Anchor the popup to where the selection is *now*, before anything can move
-    // the cursor, and reuse it for every later redraw so it never jumps around.
+    let started = Instant::now();
+    log_event(
+        LogLevel::Debug,
+        "selection.capture_started",
+        "source=hotkey",
+    );
+    // 在其他操作可能移动鼠标前记录当前选区位置，并在后续重绘中复用该锚点，避免浮窗
+    // 位置发生跳动。
     let anchor = cursor_position_on_main(&app);
     if let Some(state) = app.try_state::<AppState>() {
         if let Ok(mut stored) = state.anchor.lock() {
@@ -674,9 +1088,17 @@ async fn process_hotkey(app: AppHandle) -> Result<()> {
         }
     }
 
-    let selected =
-        capture_selected_text_on_main(&app).context("failed to capture selected text")?;
+    let selected = capture_selected_text_on_main(&app)
+        .inspect_err(|_| {
+            log_event(LogLevel::Error, "selection.capture_failed", "result=failed");
+        })
+        .context("failed to capture selected text")?;
     if selected.trim().is_empty() {
+        log_event(
+            LogLevel::Info,
+            "selection.capture_empty",
+            &format!("elapsed_ms={}", started.elapsed().as_millis()),
+        );
         #[cfg(target_os = "macos")]
         let error_msg =
             "请先选中可复制的文本，再按 ⌥T。若已选中，请在系统设置中允许 WordSnap 使用辅助功能。";
@@ -687,6 +1109,15 @@ async fn process_hotkey(app: AppHandle) -> Result<()> {
         return Ok(());
     }
 
+    log_event(
+        LogLevel::Info,
+        "selection.captured",
+        &format!(
+            "text_chars={} elapsed_ms={}",
+            selected.trim().chars().count(),
+            started.elapsed().as_millis()
+        ),
+    );
     let state = app.state::<AppState>();
     translate_selection(app.clone(), state.inner(), selected).await?;
     Ok(())
@@ -697,8 +1128,14 @@ async fn translate_selection(
     state: &AppState,
     selected: String,
 ) -> Result<FloatPayload> {
+    let started = Instant::now();
     let original = selected.trim().to_string();
     let is_word = is_single_english_word(&original);
+    log_event(
+        LogLevel::Info,
+        "translation.started",
+        &format!("text_chars={} is_word={is_word}", original.chars().count()),
+    );
     let loading = FloatPayload {
         state: "loading".to_string(),
         original: original.clone(),
@@ -712,10 +1149,22 @@ async fn translate_selection(
     let settings = state
         .settings
         .lock()
-        .map_err(|_| anyhow!("settings lock poisoned"))?
+        .map_err(|_| {
+            log_event(
+                LogLevel::Error,
+                "translation.settings_read_failed",
+                "reason=state_lock",
+            );
+            anyhow!("settings lock poisoned")
+        })?
         .clone();
     let api_key = settings.api_key.trim().to_string();
     if api_key.is_empty() {
+        log_event(
+            LogLevel::Info,
+            "translation.rejected",
+            "reason=api_key_missing",
+        );
         let payload = FloatPayload {
             state: "error".to_string(),
             original,
@@ -732,6 +1181,15 @@ async fn translate_selection(
         match call_translation_api(&state.client, &settings, &api_key, &original, is_word).await {
             Ok(text) => text,
             Err(error) => {
+                log_event(
+                    LogLevel::Error,
+                    "translation.failed",
+                    &format!(
+                        "category={} elapsed_ms={}",
+                        translation_error_category(&error),
+                        started.elapsed().as_millis()
+                    ),
+                );
                 let payload = FloatPayload {
                     state: "error".to_string(),
                     original,
@@ -746,13 +1204,18 @@ async fn translate_selection(
         };
 
     let count = if is_word {
-        Some(upsert_word(state, &original.to_lowercase(), &translated)?)
+        Some(
+            upsert_word(state, &original.to_lowercase(), &translated).inspect_err(|_| {
+                log_event(LogLevel::Error, "words.upsert_failed", "result=failed");
+            })?,
+        )
     } else {
         None
     };
 
     if is_word {
-        let _ = app.emit("words-updated", ());
+        log_ignored_error(app.emit("words-updated", ()), "words.update_event_failed");
+        log_event(LogLevel::Info, "words.upserted", "result=success");
     }
 
     let payload = FloatPayload {
@@ -766,10 +1229,29 @@ async fn translate_selection(
 
     let width = if is_word { 300 } else { 340 };
     set_float_payload(&app, payload.clone(), width, 150);
+    log_event(
+        LogLevel::Info,
+        "translation.completed",
+        &format!(
+            "is_word={is_word} output_chars={} elapsed_ms={}",
+            payload
+                .translation
+                .as_deref()
+                .map(str::chars)
+                .map(Iterator::count)
+                .unwrap_or(0),
+            started.elapsed().as_millis()
+        ),
+    );
     Ok(payload)
 }
 
 fn show_error_float(app: &AppHandle, original: impl Into<String>, error: impl Into<String>) {
+    log_event(
+        LogLevel::Debug,
+        "window.error_float_requested",
+        "result=started",
+    );
     let payload = FloatPayload {
         state: "error".to_string(),
         original: original.into(),
@@ -793,6 +1275,38 @@ fn friendly_hotkey_error(error: &anyhow::Error) -> &'static str {
     }
 }
 
+fn hotkey_error_category(error: &anyhow::Error) -> &'static str {
+    let message = error.to_string();
+    if message.contains("timed out") {
+        "selection_timeout"
+    } else if message.contains("capture selected text") {
+        "selection_capture"
+    } else if message.contains("input simulator") {
+        "input_simulator"
+    } else {
+        "translation_or_internal"
+    }
+}
+
+fn translation_error_category(error: &anyhow::Error) -> &'static str {
+    let message = error.to_string();
+    if message.contains("连接超时") {
+        "timeout"
+    } else if message.contains("无法连接服务器") {
+        "connection"
+    } else if message.contains("API Key") {
+        "authentication"
+    } else if message.contains("API 返回错误") {
+        "http_status"
+    } else if message.contains("JSON") || message.contains("缺少翻译内容") {
+        "invalid_response"
+    } else if message.contains("空的翻译结果") {
+        "empty_response"
+    } else {
+        "network_or_internal"
+    }
+}
+
 async fn call_translation_api(
     client: &Client,
     settings: &StoredSettings,
@@ -800,6 +1314,7 @@ async fn call_translation_api(
     text: &str,
     is_word: bool,
 ) -> Result<String> {
+    let started = Instant::now();
     let target_lang = if settings.target_lang.trim().is_empty() {
         StoredSettings::default().target_lang
     } else {
@@ -827,6 +1342,18 @@ async fn call_translation_api(
         }],
     };
 
+    log_event(
+        LogLevel::Info,
+        "network.translation_request_started",
+        &format!(
+            "transport={} is_word={is_word}",
+            if settings.base_url.starts_with("https://") {
+                "https"
+            } else {
+                "http_or_other"
+            }
+        ),
+    );
     let response = match client
         .post(chat_completions_url(&settings.base_url))
         .bearer_auth(api_key)
@@ -843,6 +1370,21 @@ async fn call_translation_api(
             } else {
                 "网络请求失败"
             };
+            log_event(
+                LogLevel::Error,
+                "network.translation_request_failed",
+                &format!(
+                    "category={} elapsed_ms={}",
+                    if error.is_timeout() {
+                        "timeout"
+                    } else if error.is_connect() {
+                        "connection"
+                    } else {
+                        "request"
+                    },
+                    started.elapsed().as_millis()
+                ),
+            );
             return Err(anyhow!(
                 "{reason}：请检查网络，或确认「模型地址」是否正确可达。"
             ));
@@ -851,6 +1393,15 @@ async fn call_translation_api(
 
     let status = response.status();
     if !status.is_success() {
+        log_event(
+            LogLevel::Error,
+            "network.translation_http_error",
+            &format!(
+                "status={} elapsed_ms={}",
+                status.as_u16(),
+                started.elapsed().as_millis()
+            ),
+        );
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             return Err(anyhow!("API Key 无效或无权限，请在「设置…」中检查。"));
         }
@@ -875,15 +1426,29 @@ async fn call_translation_api(
 
     let trimmed = content.trim().replace('；', ";");
     if trimmed.is_empty() {
+        log_event(
+            LogLevel::Error,
+            "network.translation_response_empty",
+            &format!("elapsed_ms={}", started.elapsed().as_millis()),
+        );
         Err(anyhow!("API 返回了空的翻译结果。"))
     } else {
+        log_event(
+            LogLevel::Info,
+            "network.translation_request_completed",
+            &format!(
+                "status={} response_chars={} elapsed_ms={}",
+                status.as_u16(),
+                trimmed.chars().count(),
+                started.elapsed().as_millis()
+            ),
+        );
         Ok(trimmed)
     }
 }
 
-/// Pulls a readable message out of an OpenAI-style error body
-/// (`{"error":{"message":"…"}}`), falling back to the raw (truncated) text so the
-/// user sees the actual server reason instead of a generic "translation failed".
+/// 从 OpenAI 格式的错误正文 `{"error":{"message":"…"}}` 中提取可读消息。解析失败时，
+/// 返回截断后的原始正文，使界面能够显示服务端原因，而不是通用的翻译失败提示。
 fn extract_api_error(body: &str) -> String {
     serde_json::from_str::<Value>(body)
         .ok()
@@ -934,6 +1499,11 @@ impl MacClipboardRestoreGuard {
         let pasteboard = NSPasteboard::generalPasteboard();
         let restore_if_change_count = pasteboard.changeCount();
         let snapshot = snapshot_macos_pasteboard(&pasteboard);
+        log_event(
+            LogLevel::Debug,
+            "clipboard.snapshot_created",
+            &format!("items={}", snapshot.len()),
+        );
 
         Self {
             pasteboard,
@@ -944,6 +1514,11 @@ impl MacClipboardRestoreGuard {
 
     fn clear_for_capture(&mut self) {
         self.restore_if_change_count = self.pasteboard.clearContents();
+        log_event(
+            LogLevel::Debug,
+            "clipboard.cleared_for_capture",
+            "result=success",
+        );
     }
 
     fn mark_current_as_owned(&mut self) {
@@ -951,14 +1526,19 @@ impl MacClipboardRestoreGuard {
     }
 
     fn restore(&mut self) {
-        // If the user copied something while WordSnap was translating, do not
-        // overwrite their new clipboard contents with our older snapshot.
+        // 如果用户在 WordSnap 翻译期间复制了新内容，不得使用先前快照覆盖新剪贴板内容。
         if self.pasteboard.changeCount() != self.restore_if_change_count {
+            log_event(
+                LogLevel::Info,
+                "clipboard.restore_skipped",
+                "reason=clipboard_changed_by_user",
+            );
             return;
         }
 
-        let _ = self.pasteboard.clearContents();
+        self.pasteboard.clearContents();
         if self.snapshot.is_empty() {
+            log_event(LogLevel::Debug, "clipboard.restore_completed", "items=0");
             return;
         }
 
@@ -979,7 +1559,19 @@ impl MacClipboardRestoreGuard {
 
         if !items.is_empty() {
             let objects = NSArray::from_retained_slice(&items);
-            let _ = self.pasteboard.writeObjects(&objects);
+            if self.pasteboard.writeObjects(&objects) {
+                log_event(
+                    LogLevel::Debug,
+                    "clipboard.restore_completed",
+                    &format!("items={}", items.len()),
+                );
+            } else {
+                log_event(
+                    LogLevel::Error,
+                    "clipboard.restore_failed",
+                    "platform=macos",
+                );
+            }
         }
     }
 }
@@ -1021,6 +1613,11 @@ fn snapshot_macos_pasteboard(pasteboard: &NSPasteboard) -> Vec<MacPasteboardItem
 
 #[cfg(target_os = "macos")]
 fn capture_selected_text() -> Result<String> {
+    log_event(
+        LogLevel::Debug,
+        "clipboard.capture_started",
+        "platform=macos",
+    );
     let mut restore_guard = MacClipboardRestoreGuard::new();
     restore_guard.clear_for_capture();
 
@@ -1047,21 +1644,28 @@ fn capture_selected_text() -> Result<String> {
 
 #[cfg(not(target_os = "macos"))]
 fn capture_selected_text() -> Result<String> {
+    log_event(
+        LogLevel::Debug,
+        "clipboard.capture_started",
+        "platform=non_macos",
+    );
     let mut clipboard = Clipboard::new().context("failed to open clipboard")?;
     let previous = clipboard.get_text().ok();
 
-    // Clear the clipboard first so that a copy which never lands reads back as
-    // empty instead of silently leaving the *previous* clipboard text in place
-    // (which we'd then mistranslate). This is what made Windows appear to only
-    // ever translate the last manually copied content.
-    let _ = clipboard.set_text(String::new());
+    // 模拟复制前清空剪贴板。复制操作未写入内容时，读取结果应为空，而不应保留先前文本，
+    // 否则应用会错误翻译旧内容。Windows 曾因此只翻译最近一次手动复制的文本。
+    if clipboard.set_text(String::new()).is_err() {
+        log_event(
+            LogLevel::Error,
+            "clipboard.clear_failed",
+            "platform=non_macos",
+        );
+    }
 
     simulate_copy_selection()?;
 
-    // Poll for the copy to land rather than assuming a single fixed delay is
-    // enough — clipboard population latency varies by app, and a too-short wait
-    // showed up as stale/empty results. Caps at ~600ms, well under the 3s
-    // main-thread capture timeout.
+    // 不同应用写入剪贴板的延迟不同，因此轮询等待复制结果，不使用单次固定延迟。等待时间
+    // 过短会产生旧结果或空结果。轮询上限约为 600 毫秒，低于主线程读取的 3 秒超时。
     let mut selected = String::new();
     for _ in 0..50 {
         thread::sleep(Duration::from_millis(12));
@@ -1074,26 +1678,46 @@ fn capture_selected_text() -> Result<String> {
     }
 
     if let Some(previous_text) = previous {
-        let _ = clipboard.set_text(previous_text);
+        if clipboard.set_text(previous_text).is_err() {
+            log_event(
+                LogLevel::Error,
+                "clipboard.restore_failed",
+                "platform=non_macos",
+            );
+        } else {
+            log_event(
+                LogLevel::Debug,
+                "clipboard.restore_completed",
+                "format=text",
+            );
+        }
     }
 
     Ok(selected)
 }
 
 fn simulate_copy_selection() -> Result<()> {
+    log_event(
+        LogLevel::Debug,
+        "input.copy_simulation_started",
+        "result=started",
+    );
     let mut enigo = Enigo::new(&EnigoSettings::default())
         .map_err(|error| anyhow!("failed to initialize input simulator: {error:?}"))?;
 
-    // The global shortcut fires on key-*down*, so Alt (from Alt+T / Option+T)
-    // is still physically held when we get here. On Windows/Linux synthetic
-    // input shares the real keyboard state, so a held Alt turns the copy into
-    // Ctrl+Alt+C and nothing is copied — the reason double-click selections
-    // weren't captured. Lift Alt before issuing the copy. (macOS synthetic
-    // events carry their own modifier flags, so it isn't affected and we leave
-    // its key state untouched.)
+    // 全局快捷键在按键按下时触发，因此执行到此处时，Alt+T 或 Option+T 中的 Alt 键仍处于
+    // 物理按下状态。在 Windows 和 Linux 上，模拟输入与真实键盘共享修饰键状态，继续按住
+    // Alt 会使复制组合键变为 Ctrl+Alt+C，导致双击选择的文本无法读取。执行复制前应释放
+    // Alt。macOS 模拟事件携带独立的修饰键标志，不受此问题影响，因此不修改其按键状态。
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = enigo.key(Key::Alt, Release);
+        if enigo.key(Key::Alt, Release).is_err() {
+            log_event(
+                LogLevel::Error,
+                "input.alt_release_failed",
+                "platform=non_macos",
+            );
+        }
         thread::sleep(Duration::from_millis(20));
     }
 
@@ -1105,7 +1729,7 @@ fn simulate_copy_selection() -> Result<()> {
     #[cfg(target_os = "macos")]
     let key_c = Key::Unicode('c');
     #[cfg(target_os = "windows")]
-    let key_c = Key::Other(0x43); // VK_C — Unicode('c') would bypass the Ctrl modifier on Windows
+    let key_c = Key::Other(0x43); // Windows 上使用 Unicode('c') 会绕过 Ctrl 修饰键，因此使用 VK_C。
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let key_c = Key::Unicode('c');
 
@@ -1113,6 +1737,11 @@ fn simulate_copy_selection() -> Result<()> {
     enigo.key(key_c, Click).map_err(enigo_err)?;
     enigo.key(modifier, Release).map_err(enigo_err)?;
 
+    log_event(
+        LogLevel::Debug,
+        "input.copy_simulation_completed",
+        "result=success",
+    );
     Ok(())
 }
 
@@ -1121,7 +1750,13 @@ fn capture_selected_text_on_main(app: &AppHandle) -> Result<String> {
 
     app.run_on_main_thread(move || {
         let result = capture_selected_text();
-        let _ = tx.send(result);
+        if tx.send(result).is_err() {
+            log_event(
+                LogLevel::Error,
+                "selection.result_channel_send_failed",
+                "result=failed",
+            );
+        }
     })
     .context("failed to schedule selection capture on main thread")?;
 
@@ -1130,40 +1765,64 @@ fn capture_selected_text_on_main(app: &AppHandle) -> Result<String> {
 }
 
 fn cursor_position() -> (i32, i32) {
-    let enigo = Enigo::new(&EnigoSettings::default());
-    enigo
-        .ok()
-        .and_then(|input| input.location().ok())
-        .unwrap_or((620, 260))
+    let Ok(input) = Enigo::new(&EnigoSettings::default()) else {
+        log_event(
+            LogLevel::Error,
+            "cursor.input_initialization_failed",
+            "fallback=default",
+        );
+        return (620, 260);
+    };
+    input.location().unwrap_or_else(|_| {
+        log_event(
+            LogLevel::Error,
+            "cursor.position_read_failed",
+            "fallback=default",
+        );
+        (620, 260)
+    })
 }
 
-/// Reads the cursor location on the main thread. On macOS the input APIs must be
-/// touched from the main thread, so calling `cursor_position()` from a spawned
-/// task can silently return the fallback and drop the popup in the wrong place.
-/// Returns the position already normalised to logical points (see
-/// `logical_cursor_position`).
+/// 在主线程中读取鼠标位置。macOS 输入 API 必须由主线程调用；在派生任务中调用
+/// `cursor_position()` 可能直接返回备用值，使浮窗显示在错误位置。返回值已经通过
+/// `logical_cursor_position` 转换为逻辑坐标。
 fn cursor_position_on_main(app: &AppHandle) -> (i32, i32) {
     let (tx, rx) = mpsc::channel();
     let app_for_main = app.clone();
     if app
         .run_on_main_thread(move || {
-            let _ = tx.send(logical_cursor_position(&app_for_main));
+            if tx.send(logical_cursor_position(&app_for_main)).is_err() {
+                log_event(
+                    LogLevel::Error,
+                    "cursor.result_channel_send_failed",
+                    "result=failed",
+                );
+            }
         })
         .is_ok()
     {
         if let Ok(pos) = rx.recv_timeout(Duration::from_secs(1)) {
             return pos;
         }
+        log_event(
+            LogLevel::Error,
+            "cursor.main_thread_read_timeout",
+            "fallback=direct_read",
+        );
+    } else {
+        log_event(
+            LogLevel::Error,
+            "cursor.main_thread_schedule_failed",
+            "fallback=direct_read",
+        );
     }
     logical_cursor_position(app)
 }
 
-/// enigo reports the cursor in *physical* pixels on Windows/Linux but in
-/// *logical* points on macOS. The float is placed with `LogicalPosition`, so on
-/// a scaled Windows/Linux display the raw physical coordinate would be pushed
-/// toward the bottom-right by the scale factor (the popup landing far from the
-/// selection). Normalise to logical points here so the anchor is correct on
-/// every platform.
+/// enigo 在 Windows 和 Linux 上以物理像素报告鼠标位置，在 macOS 上则以逻辑点报告。
+/// 浮窗使用 `LogicalPosition` 定位，因此，在启用缩放的 Windows 或 Linux 显示器上直接
+/// 使用物理坐标，会使浮窗按缩放系数偏向右下方。此函数将坐标统一转换为逻辑点，以保证
+/// 所有平台上的锚点位置正确。
 fn logical_cursor_position(app: &AppHandle) -> (i32, i32) {
     let (raw_x, raw_y) = cursor_position();
     #[cfg(target_os = "macos")]
@@ -1178,7 +1837,14 @@ fn logical_cursor_position(app: &AppHandle) -> (i32, i32) {
             .and_then(|window| {
                 monitor_scale_for_physical_point(&window, raw_x as f64, raw_y as f64)
             })
-            .unwrap_or(1.0);
+            .unwrap_or_else(|| {
+                log_event(
+                    LogLevel::Error,
+                    "cursor.monitor_scale_missing",
+                    "fallback=1",
+                );
+                1.0
+            });
         (
             (raw_x as f64 / scale).round() as i32,
             (raw_y as f64 / scale).round() as i32,
@@ -1186,8 +1852,7 @@ fn logical_cursor_position(app: &AppHandle) -> (i32, i32) {
     }
 }
 
-/// Scale factor of the monitor whose *physical* bounds contain the given
-/// physical point, falling back to the current/primary monitor.
+/// 返回物理边界包含指定物理坐标的显示器缩放系数。无法匹配时，使用当前显示器或主显示器。
 #[cfg(not(target_os = "macos"))]
 fn monitor_scale_for_physical_point(window: &tauri::WebviewWindow, x: f64, y: f64) -> Option<f64> {
     if let Ok(monitors) = window.available_monitors() {
@@ -1211,10 +1876,27 @@ fn monitor_scale_for_physical_point(window: &tauri::WebviewWindow, x: f64, y: f6
 }
 
 fn set_float_payload(app: &AppHandle, payload: FloatPayload, width: u32, height: u32) {
+    log_event(
+        LogLevel::Debug,
+        "window.float_payload_update_started",
+        &format!("state={} width={width} height={height}", payload.state),
+    );
     if let Some(state) = app.try_state::<AppState>() {
         if let Ok(mut current) = state.float.lock() {
             *current = payload.clone();
+        } else {
+            log_event(
+                LogLevel::Error,
+                "window.float_state_update_failed",
+                "reason=state_lock",
+            );
         }
+    } else {
+        log_event(
+            LogLevel::Error,
+            "window.float_state_update_failed",
+            "reason=state_missing",
+        );
     }
 
     if let Some(window) = app.get_webview_window("float") {
@@ -1229,26 +1911,44 @@ fn set_float_payload(app: &AppHandle, payload: FloatPayload, width: u32, height:
             width as f64,
             height as f64,
         );
-        let _ = window.set_size(LogicalSize::new(width as f64, height as f64));
-        let _ = window.set_position(LogicalPosition::new(x, y));
-        let _ = window.emit("float-updated", payload);
+        log_ignored_error(
+            window.set_size(LogicalSize::new(width as f64, height as f64)),
+            "window.float_size_failed",
+        );
+        log_ignored_error(
+            window.set_position(LogicalPosition::new(x, y)),
+            "window.float_position_failed",
+        );
+        log_ignored_error(
+            window.emit("float-updated", payload),
+            "window.float_update_event_failed",
+        );
         #[cfg(target_os = "macos")]
         show_float_without_activation(&window);
         #[cfg(not(target_os = "macos"))]
         {
-            if let Err(error) = window.show() {
-                eprintln!("failed to show translation popup: {error}");
+            if window.show().is_err() {
+                log_event(LogLevel::Error, "window.float_show_failed", "result=failed");
             }
-            if let Err(error) = window.set_focus() {
-                eprintln!("failed to focus translation popup: {error}");
+            if window.set_focus().is_err() {
+                log_event(
+                    LogLevel::Error,
+                    "window.float_focus_failed",
+                    "result=failed",
+                );
             }
         }
+    } else {
+        log_event(
+            LogLevel::Error,
+            "window.float_update_failed",
+            "reason=window_missing",
+        );
     }
 }
 
-/// Places the float just below and slightly left of the selection/cursor,
-/// keeping the whole card within the monitor it lands on. All maths is in
-/// logical points so it stays correct on Retina displays.
+/// 将浮窗放置在选区或鼠标的下方并略微向左偏移，同时保证整个卡片位于目标显示器内。
+/// 所有计算均使用逻辑点，以保证 Retina 显示器上的定位正确。
 fn float_origin(
     window: &tauri::WebviewWindow,
     cursor_x: f64,
@@ -1256,13 +1956,12 @@ fn float_origin(
     width: f64,
     height: f64,
 ) -> (f64, f64) {
-    // Nudge left of the cursor and drop below it so the popup doesn't cover the
-    // text the user just selected.
+    // 使浮窗位于鼠标左下方，避免覆盖用户刚选中的文本。
     let mut x = cursor_x - 24.0;
     let mut y = cursor_y + 20.0;
 
-    // Clamp to the monitor the *selection* is on (not wherever the float window
-    // happens to sit), so a selection on a secondary display stays on it.
+    // 根据选区所在的显示器限制浮窗位置，不使用浮窗先前所在的显示器，以保证辅助显示器上的
+    // 选区仍在该显示器上显示浮窗。
     if let Some((left, top, right, bottom)) = monitor_bounds_for_point(window, cursor_x, cursor_y) {
         let left = left + 8.0;
         let top = top + 8.0;
@@ -1275,10 +1974,9 @@ fn float_origin(
     (x, y)
 }
 
-/// Logical bounds `(left, top, right, bottom)` of the monitor containing the
-/// given logical point, falling back to the current/primary monitor. Monitor
-/// geometry is physical, so it is divided by each monitor's own scale factor to
-/// match the logical-point coordinate space the cursor is reported in.
+/// 返回包含指定逻辑坐标的显示器逻辑边界 `(left, top, right, bottom)`。无法匹配时，使用
+/// 当前显示器或主显示器。显示器几何信息采用物理坐标，因此需要除以各显示器的缩放系数，
+/// 以匹配鼠标位置使用的逻辑坐标空间。
 fn monitor_bounds_for_point(
     window: &tauri::WebviewWindow,
     x: f64,
@@ -1317,14 +2015,33 @@ fn monitor_bounds_for_point(
 
 fn toggle_menu_window(app: &AppHandle, tray_x: i32, tray_y: i32) {
     if let Some(window) = app.get_webview_window("menu") {
-        if window.is_visible().unwrap_or(false) {
-            let _ = window.hide();
+        let is_visible = match window.is_visible() {
+            Ok(value) => value,
+            Err(_) => {
+                log_event(
+                    LogLevel::Error,
+                    "window.menu_visibility_read_failed",
+                    "result=failed",
+                );
+                false
+            }
+        };
+        if is_visible {
+            log_ignored_error(window.hide(), "window.menu_hide_failed");
+            log_event(LogLevel::Debug, "window.menu_hidden", "source=tray");
             return;
         }
 
-        let scale_factor = window.scale_factor().unwrap_or(1.0);
+        let scale_factor = window.scale_factor().unwrap_or_else(|_| {
+            log_event(
+                LogLevel::Error,
+                "window.menu_scale_read_failed",
+                "fallback=1",
+            );
+            1.0
+        });
 
-        // Find the monitor containing the tray icon click position
+        // 查找包含托盘图标点击位置的显示器。
         let monitor = if let Ok(monitors) = window.available_monitors() {
             monitors.into_iter().find(|m| {
                 let pos = m.position();
@@ -1342,25 +2059,32 @@ fn toggle_menu_window(app: &AppHandle, tray_x: i32, tray_y: i32) {
 
         if let Some(monitor) = monitor {
             let work_area = monitor.work_area();
-            let window_size = window.outer_size().unwrap_or_default();
+            let window_size = window.outer_size().unwrap_or_else(|_| {
+                log_event(
+                    LogLevel::Error,
+                    "window.menu_size_read_failed",
+                    "fallback=default",
+                );
+                Default::default()
+            });
             let w = window_size.width as i32;
             let h = window_size.height as i32;
 
-            // Center the window horizontally on the tray icon click position.
+            // 以托盘图标点击位置为基准，使窗口水平居中。
             let mut x = tray_x - w / 2;
 
-            // Determine if the taskbar is at the top or bottom of the screen.
+            // 根据点击位置判断任务栏位于屏幕顶部还是底部。
             let monitor_center_y = work_area.position.y + (work_area.size.height as i32) / 2;
             let gap = (8.0 * scale_factor) as i32;
             let mut y = if tray_y > monitor_center_y {
-                // Taskbar is near the bottom: pop the window above the tray icon
+                // 任务栏位于底部时，在托盘图标上方显示窗口。
                 tray_y - h - gap
             } else {
-                // Taskbar is near the top: drop the window below the tray icon
+                // 任务栏位于顶部时，在托盘图标下方显示窗口。
                 tray_y + gap
             };
 
-            // Clamp both coordinates to ensure the entire window stays within the work area.
+            // 限制两个坐标，保证整个窗口位于显示器工作区内。
             x = x.clamp(
                 work_area.position.x,
                 work_area.position.x + work_area.size.width as i32 - w,
@@ -1370,22 +2094,40 @@ fn toggle_menu_window(app: &AppHandle, tray_x: i32, tray_y: i32) {
                 work_area.position.y + work_area.size.height as i32 - h,
             );
 
-            let _ = window.set_position(PhysicalPosition::new(x, y));
+            log_ignored_error(
+                window.set_position(PhysicalPosition::new(x, y)),
+                "window.menu_position_failed",
+            );
         } else {
-            // Fallback to legacy static offsets if monitor info is unavailable.
+            // 无法取得显示器信息时，使用原有固定偏移量。
             let x = tray_x.saturating_sub(196);
             let y = tray_y.saturating_add(24);
-            let _ = window.set_position(PhysicalPosition::new(x, y));
+            log_event(
+                LogLevel::Info,
+                "window.menu_monitor_fallback",
+                "result=used",
+            );
+            log_ignored_error(
+                window.set_position(PhysicalPosition::new(x, y)),
+                "window.menu_position_failed",
+            );
         }
 
-        let _ = window.show();
-        let _ = window.set_focus();
+        log_ignored_error(window.show(), "window.menu_show_failed");
+        log_ignored_error(window.set_focus(), "window.menu_focus_failed");
+        log_event(LogLevel::Debug, "window.menu_shown", "source=tray");
+    } else {
+        log_event(
+            LogLevel::Error,
+            "window.menu_toggle_failed",
+            "reason=window_missing",
+        );
     }
 }
 
 fn hide_menu_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("menu") {
-        let _ = window.hide();
+        log_ignored_error(window.hide(), "window.menu_hide_failed");
     }
 }
 
@@ -1400,6 +2142,11 @@ fn show_window(app: &AppHandle, label: &str) -> Result<(), String> {
 }
 
 fn read_words(state: &AppState) -> Result<WordListPayload> {
+    log_event(
+        LogLevel::Debug,
+        "database.words_query_started",
+        "result=started",
+    );
     let conn = state
         .conn
         .lock()
@@ -1424,10 +2171,20 @@ fn read_words(state: &AppState) -> Result<WordListPayload> {
     })?;
 
     let words = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    log_event(
+        LogLevel::Debug,
+        "database.words_query_completed",
+        &format!("total={total}"),
+    );
     Ok(WordListPayload { total, words })
 }
 
 fn upsert_word(state: &AppState, word: &str, translation: &str) -> Result<i64> {
+    log_event(
+        LogLevel::Debug,
+        "database.word_upsert_started",
+        "result=started",
+    );
     let now = Utc::now().to_rfc3339();
     let conn = state
         .conn
@@ -1450,16 +2207,31 @@ fn upsert_word(state: &AppState, word: &str, translation: &str) -> Result<i64> {
         |row| row.get(0),
     )?;
 
+    log_event(
+        LogLevel::Debug,
+        "database.word_upsert_completed",
+        &format!("count={count}"),
+    );
     Ok(count)
 }
 
 fn delete_word(state: &AppState, word: &str) -> Result<()> {
+    log_event(
+        LogLevel::Debug,
+        "database.word_delete_started",
+        "result=started",
+    );
     let conn = state
         .conn
         .lock()
         .map_err(|_| anyhow!("database lock poisoned"))?;
 
-    conn.execute("DELETE FROM words WHERE word = ?1", params![word])?;
+    let affected = conn.execute("DELETE FROM words WHERE word = ?1", params![word])?;
+    log_event(
+        LogLevel::Debug,
+        "database.word_delete_completed",
+        &format!("affected={affected}"),
+    );
     Ok(())
 }
 
@@ -1507,12 +2279,8 @@ fn save_settings_file(app_dir: &Path, settings: &StoredSettings) -> Result<()> {
     let raw = serde_json::to_string_pretty(settings)?;
     let path = app_dir.join("settings.json");
     fs::write(&path, raw)?;
-    // The file holds the API key in plain text, so lock it down to the owner.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
-    }
+    // 文件以明文形式保存 API Key，因此将访问权限限制为文件所有者。
+    restrict_file_permissions(&path);
     Ok(())
 }
 
@@ -1611,10 +2379,67 @@ fn to_string<E: std::fmt::Display>(error: E) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
     use super::{
         chat_completions_url, float_is_dismissible, is_single_english_word, mask_api_key,
-        normalize_base_url,
+        normalize_base_url, sanitize_log_field, session_log_filename, AppLogger, LogLevel,
     };
+
+    #[test]
+    fn names_session_log_files_with_start_time_and_process_id() {
+        assert_eq!(
+            session_log_filename("2026-08-12_14-35-22.123", 4567),
+            "2026-08-12_14-35-22.123_pid-4567.log"
+        );
+    }
+
+    #[test]
+    fn sanitizes_control_characters_and_limits_log_fields() {
+        assert_eq!(
+            sanitize_log_field("first\nsecond\tvalue"),
+            "first second value"
+        );
+        assert_eq!(sanitize_log_field(&"a".repeat(300)).chars().count(), 240);
+    }
+
+    #[test]
+    fn writes_all_levels_to_the_same_session_file() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should follow Unix epoch")
+            .as_nanos();
+        let directory =
+            std::env::temp_dir().join(format!("wordsnap-log-test-{}-{unique}", std::process::id()));
+        fs::create_dir_all(&directory).expect("test log directory should be created");
+
+        let started_at = "2026-08-12_14-35-22.123";
+        let process_id = 4567;
+        let mut logger = AppLogger::new_with_identity(directory.clone(), started_at, process_id)
+            .expect("logger should initialize");
+        logger
+            .write(LogLevel::Debug, "test.debug", "result=success")
+            .expect("debug log should be written");
+        logger
+            .write(LogLevel::Info, "test.info", "result=success")
+            .expect("info log should be written");
+        logger
+            .write(LogLevel::Error, "test.error", "result=failed")
+            .expect("error log should be written");
+        drop(logger);
+
+        let path = directory.join(session_log_filename(started_at, process_id));
+        let contents = fs::read_to_string(&path).expect("session log should be readable");
+        assert!(contents.contains("DEBUG test.debug result=success"));
+        assert!(contents.contains("INFO test.info result=success"));
+        assert!(contents.contains("ERROR test.error result=failed"));
+
+        fs::remove_file(path).expect("test log should be removed");
+        fs::remove_dir(directory).expect("test log directory should be removed");
+    }
 
     #[test]
     fn dismisses_only_completed_float_states() {

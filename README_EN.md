@@ -4,7 +4,7 @@
 
 <h1 align="center">WordSnap</h1>
 
-<p align="center">Select text, press a shortcut, and get an AI translation in place.</p>
+<p align="center">Select text, press the shortcut, and view an AI translation near the selection.</p>
 
 <p align="center">
   <a href="README.md">简体中文</a> · <strong>English</strong>
@@ -12,12 +12,12 @@
 
 <p align="center">
   <a href="https://github.com/YunFy26/WordSnap/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/YunFy26/WordSnap/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
 </p>
 
-WordSnap is a lightweight desktop AI translation utility. Select copyable text in any application, press `Option+T` on macOS or `Alt+T` elsewhere, and the translation appears near the selection. Foreign-language input is translated into the configured target language; Simplified Chinese input is turned into natural English.
+WordSnap is a lightweight desktop selection-translation utility. Select copyable text in any application, then press `Option+T` on macOS or `Alt+T` on other platforms to display the translation near the selection. Foreign-language input is translated into the configured target language. Simplified Chinese input is translated into natural English.
 
-Settings and saved words stay on your device. The selected text is sent to the OpenAI-compatible API that you configure.
+Application settings and saved words remain on the local device. When a translation is requested, the selected text is sent to the OpenAI-compatible API configured by the user.
 
 <p align="center">
   <a href="https://github.com/YunFy26/WordSnap/releases/latest">Download the latest release</a> ·
@@ -26,7 +26,7 @@ Settings and saved words stay on your device. The selected text is sent to the O
   <a href="SECURITY.md">Security</a>
 </p>
 
-## Demo
+## Demonstration
 
 ### Chinese to English
 
@@ -38,19 +38,19 @@ Settings and saved words stay on your device. The selected text is sent to the O
 
 ## Features
 
-- Translate copyable selected text in any application with `Option+T` / `Alt+T`.
-- Translate foreign-language text into your target language and Simplified Chinese into natural English.
-- Show the result near the selection and dismiss completed cards by clicking outside them.
-- Stay visible over native full-screen apps and multiple Spaces on macOS without stealing focus.
-- Save only single ASCII English words, optionally hyphenated, to a local SQLite word list.
-- Update the translation, lookup count, and last-seen time when a word is looked up again.
-- Open the word list, settings, and quit action from the menu bar or system tray.
-- Configure an OpenAI-compatible Base URL, model ID, and target language.
-- No accounts, cloud sync, advertising, or telemetry.
+- Translate copyable selected text in any application by pressing `Option+T` or `Alt+T`.
+- Translate foreign-language text into the selected target language and Simplified Chinese into natural English.
+- Display the translation near the selection and close a completed card by clicking outside it.
+- Remain visible over native full-screen applications and multiple Spaces on macOS without taking focus from the current application.
+- Save only a single ASCII English word, optionally containing a hyphen, to the local SQLite word list.
+- Update the translation, lookup count, and most recent lookup time when a word is queried again.
+- Provide access to the word list, settings, and quit action from the menu bar or system tray.
+- Support a custom OpenAI-compatible Base URL, model ID, and target language.
+- Include no account system, cloud synchronization, advertising, or telemetry.
 
 ## Download and run
 
-Download a portable build or installer for your platform from [GitHub Releases](https://github.com/YunFy26/WordSnap/releases/latest).
+Download the portable build or installer for the current platform from [GitHub Releases](https://github.com/YunFy26/WordSnap/releases/latest).
 
 | Platform | Recommended download | Other formats |
 | --- | --- | --- |
@@ -59,51 +59,59 @@ Download a portable build or installer for your platform from [GitHub Releases](
 | Windows x64 | `WordSnap_<version>_windows-x64_portable.zip` | `.msi`, NSIS `.exe` |
 | Linux x64 | `.AppImage` | `.deb`, `.rpm` |
 
-Portable builds do not need installation. Extract the archive and run `WordSnap.app` or `WordSnap.exe`. For an AppImage, run `chmod +x WordSnap_*.AppImage` first.
+Portable builds do not require an installer. On macOS and Windows, extract the archive and run `WordSnap.app` or `WordSnap.exe`. Before running an AppImage for the first time, execute `chmod +x WordSnap_*.AppImage`.
 
 > [!NOTE]
-> Current releases are unsigned. If macOS Gatekeeper blocks the first launch, right-click `WordSnap.app` and choose **Open**, or run `xattr -cr WordSnap.app`. Windows may also show a SmartScreen warning.
+> Current releases are not code-signed. If macOS Gatekeeper prevents the first launch, right-click `WordSnap.app` and select Open, or run `xattr -cr WordSnap.app`. Windows SmartScreen may also display a security warning.
 
-## First use
+## Initial configuration
 
-1. Start WordSnap and click its menu bar or system tray icon.
-2. Open **Settings…** and enter your API key.
-3. Change the Base URL, model ID, or target language if needed.
+1. Start WordSnap and select its icon in the menu bar or system tray.
+2. Open Settings and enter the API key.
+3. Modify the Base URL, model ID, and target language if required.
 4. Select copyable text in any application.
-5. Press `Option+T` on macOS or `Alt+T` to translate it.
+5. Press `Option+T` on macOS or `Alt+T` on another platform, then view the translation.
 
-Default configuration:
+The default configuration is as follows:
 
-| Setting | Default |
+| Setting | Default value |
 | --- | --- |
 | Base URL | `https://api.openai.com/v1` |
 | Model | `gpt-4o-mini` |
 | Target language | Simplified Chinese |
 
-On macOS, reading the selection may require Accessibility permission. If WordSnap cannot capture already selected text, allow it under **System Settings → Privacy & Security → Accessibility**.
+On macOS, selection capture may require Accessibility permission. If WordSnap cannot read text that is already selected, allow WordSnap under System Settings, Privacy & Security, Accessibility.
 
-## Configuration and data
+## Configuration and local data
 
-The Base URL may include or omit its scheme. WordSnap normalizes it and appends `/chat/completions` when necessary; a URL that already ends in that path is used as-is. Use HTTPS for remote services. Plain HTTP is intended only for an explicitly local development endpoint.
+The Base URL may include or omit its scheme. WordSnap normalizes the address and appends `/chat/completions` when required. An address that already ends with this path is used without modification. Remote services should use HTTPS. Plain HTTP is appropriate only for an explicitly local development endpoint.
 
-Local data is stored in the application data directory assigned by Tauri:
+Tauri stores local data in the application data directory assigned by the operating system:
 
-- `settings.json`: API key, Base URL, model, and target language.
-- `wordsnap.sqlite3`: English words, translations, lookup counts, and timestamps.
+- `settings.json`: stores the API key, Base URL, model, and target language.
+- `wordsnap.sqlite3`: stores English words, translations, lookup counts, and timestamps.
+
+Runtime logs are stored in the project root `logs/` directory. Every application start creates a
+separate `YYYY-MM-DD_HH-mm-ss.SSS_pid-<process-id>.log` file. All `DEBUG`, `INFO`, and `ERROR`
+entries for that application session are written to the same file until the application exits. Logs
+cover startup, initialization, hotkeys, clipboard handling, translation requests, database
+operations, windows, settings, and shutdown. They contain diagnostic metadata such as events,
+outcomes, durations, character counts, and HTTP status codes. They do not contain API keys, selected
+text, translations, clipboard contents, complete service responses, or configured endpoint addresses.
 
 > [!IMPORTANT]
-> Selected text is sent to the API service you configure. The API key is currently stored as plain text in the local `settings.json`; WordSnap does not use the system keychain. Read [Privacy and data handling](docs/PRIVACY.md) before use.
+> Selected text is sent to the API service configured by the user. The API key is currently stored as plain text in the local `settings.json` file, and the application does not use the system credential store. Read [Privacy and data handling](docs/PRIVACY.md) before use.
 
 ## Run from source
 
 ### Requirements
 
-- Node.js 20 or later and npm
-- Rust stable with `rustfmt` and Clippy
-- The [Tauri 2 system prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform
-- An OpenAI-compatible API key
+- Node.js 20 or later and npm.
+- Rust stable with `rustfmt` and Clippy.
+- The [Tauri 2 system prerequisites](https://v2.tauri.app/start/prerequisites/) for the current platform.
+- An OpenAI-compatible API key.
 
-### Start the desktop app
+### Start the desktop application
 
 ```bash
 git clone https://github.com/YunFy26/WordSnap.git
@@ -126,67 +134,67 @@ npm run tauri build
 | `npm run format:check` | Check Rust formatting |
 | `npm run lint` | Run strict Clippy checks for all Rust targets |
 | `npm test` | Run the Rust unit tests |
-| `npm run check` | Run the build, format check, Clippy, and tests |
-| `npm run audit` | Check high-severity npm advisories using the official registry |
-| `npm run tauri dev` | Start the complete desktop app in development mode |
+| `npm run check` | Run the frontend build, formatting check, Clippy, and tests |
+| `npm run audit` | Check high-severity dependency advisories through the official npm registry |
+| `npm run tauri dev` | Start the complete desktop development environment |
 | `npm run tauri build` | Build application packages for the current platform |
-| `npm run icons` | Regenerate application and tray icons from their source files |
+| `npm run icons` | Regenerate application and tray icons from the source files |
 
 Run `npm run audit` whenever dependencies change. Local packages are written to `src-tauri/target/release/bundle/`.
 
-## How it works
+## Processing sequence
 
-1. The shortcut records the current pointer position.
-2. WordSnap snapshots the clipboard, simulates copy, reads the selection, and attempts to restore the original clipboard.
-3. It builds an OpenAI-compatible `/chat/completions` request from the input and settings.
-4. A loading state and the result appear near the selection.
-5. After translation completes, clicking outside the card hides it.
-6. If the input is a single ASCII English word, WordSnap inserts or updates it in the local word list.
+1. When the shortcut is triggered, the application records the current pointer position.
+2. The application saves the clipboard, simulates a copy operation to read the selection, and attempts to restore the original clipboard content.
+3. The application constructs an OpenAI-compatible `/chat/completions` request from the input and user settings.
+4. The loading state and translation result are displayed near the selection.
+5. After translation completes, clicking outside the card hides the popup.
+6. If the input is a single ASCII English word, the application inserts or updates the corresponding local word-list record.
 
-Phrases, sentences, Chinese text, and failed translations are never written to the word list.
+Phrases, sentences, Chinese text, and failed translations are not written to the word list.
 
 ## Project structure
 
 ```text
 .
-├── docs/                    # Privacy, release documentation, and demos
+├── docs/                    # Privacy information, release instructions, and demonstrations
 ├── scripts/                 # Icon generation scripts
 ├── src/                     # TypeScript window views and styles
-├── src-tauri/               # Tauri configuration, Rust backend, and app resources
+├── src-tauri/               # Tauri configuration, Rust backend, and application resources
 │   ├── capabilities/        # Tauri permissions available to the frontend
 │   ├── icons/               # Application and tray icons
-│   └── src/lib.rs           # Shortcut, selection, translation, word list, and window logic
+│   └── src/lib.rs           # Shortcut, selection, translation, word-list, and window logic
 ├── CONTRIBUTING.md          # Contribution workflow
-├── SECURITY.md              # Security reporting and support policy
+├── SECURITY.md              # Vulnerability reporting process and support scope
 └── package.json             # npm commands and frontend dependencies
 ```
 
-Primary entry points:
+The primary entry points are:
 
 - `src-tauri/src/lib.rs`: application state, global shortcut, selection capture, translation requests, SQLite, windows, and tray.
-- `src/main.ts`: translation card, word list, settings, and tray-menu views.
-- `src/styles.css`: production UI styling and light/dark behavior.
-- `src-tauri/tauri.conf.json`: window, bundle, and Tauri security configuration.
+- `src/main.ts`: translation popup, word list, settings, and menu views.
+- `src/styles.css`: all production interface styles and light or dark theme behavior.
+- `src-tauri/tauri.conf.json`: window, package, and Tauri security configuration.
 
-## CI and releases
+## Continuous integration and releases
 
-- `CI` runs the build, Rust formatting check, Clippy, tests, and npm audit for pushes and pull requests targeting `main`.
-- `Release` builds macOS Apple Silicon, macOS Intel, Windows x64, and Linux x64 packages for every push to `main`, then publishes a GitHub Release.
+- `CI` runs the frontend build, Rust formatting check, Clippy, tests, and npm audit for pushes and pull requests targeting `main`.
+- `Release` builds macOS Apple Silicon, macOS Intel, Windows x64, and Linux x64 packages for each push to `main`, then publishes a GitHub Release.
 
-See [docs/RELEASE.md](docs/RELEASE.md) for package formats, portable builds, and unsigned-release behavior.
+See [Release workflow](docs/RELEASE.md) for package formats, portable builds, and unsigned-release behavior.
 
 ## Troubleshooting
 
 ### The shortcut does not respond
 
-- Make sure WordSnap is running and no other application owns `Option+T` / `Alt+T`.
+- Confirm that WordSnap is running and that no other application has registered `Option+T` or `Alt+T`.
 - Check Accessibility permission on macOS.
 - Confirm that the selected text can be copied normally.
 
-### Translation fails
+### The translation request fails
 
 - Check the API key, Base URL, and network connection.
-- Confirm that the configured model is available to the current API key.
-- Never post API keys or private text in issues, logs, or screenshots.
+- Confirm that the current API key is authorized to use the selected model.
+- Do not disclose API keys or private text in issues, logs, or screenshots.
 
-Report bugs through [GitHub Issues](https://github.com/YunFy26/WordSnap/issues). Report vulnerabilities privately by following the [Security Policy](SECURITY.md).
+General problems can be submitted through [GitHub Issues](https://github.com/YunFy26/WordSnap/issues). Vulnerabilities must be reported privately according to the [Security Policy](SECURITY.md).

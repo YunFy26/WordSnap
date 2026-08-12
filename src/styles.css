@@ -1,8 +1,5 @@
-/* ---------------------------------------------------------------------------
-   Design tokens. Light values live on :root, dark values in the media query,
-   so every view (float / words / settings / menu) follows the system theme —
-   on macOS the native vibrancy material flips with it automatically.
---------------------------------------------------------------------------- */
+/* 设计变量：浅色值定义在 :root 中，深色值定义在媒体查询中。所有视图均跟随系统主题；
+   macOS 原生模糊材质会随系统主题自动切换。 */
 :root {
   color-scheme: light dark;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
@@ -83,9 +80,7 @@ select {
   }
 }
 
-/* ---------------------------------------------------------------------------
-   Float (translation popup)
---------------------------------------------------------------------------- */
+/* 翻译浮窗 */
 .float-root,
 .float-view {
   width: 100%;
@@ -96,10 +91,9 @@ select {
   padding: 0;
 }
 
-/* On macOS the frosted look and rounded corners come from the native vibrancy
-   material (`windowEffects` in tauri.conf.json), so the card stays transparent.
-   Windows/Linux get no native material — there the card paints its own solid
-   surface, border and radius (see the non-mac overrides at the bottom). */
+/* 在 macOS 上，模糊效果和圆角由 tauri.conf.json 中的 `windowEffects` 提供，
+   因此卡片保持透明。Windows 和 Linux 不提供相应原生材质，卡片通过文件末尾的
+   非 macOS 覆盖规则绘制不透明背景、边框和圆角。 */
 .float-card {
   position: relative;
   display: flex;
@@ -128,7 +122,7 @@ select {
   letter-spacing: -0.01em;
 }
 
-/* Long originals (e.g. a whole sentence while loading) stay compact. */
+/* 限制较长原文的显示行数，避免加载完整句子时卡片过高。 */
 .float-clamp {
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -136,8 +130,7 @@ select {
   overflow: hidden;
 }
 
-/* Scrollable body of the card. The window height is capped by the backend, so
-   overly long translations scroll here — with the scrollbar fully hidden. */
+/* 卡片正文允许滚动。后端限制窗口高度，因此较长译文在此区域内滚动，滚动条保持隐藏。 */
 .float-scroll {
   flex: 0 1 auto;
   min-height: 0;
@@ -269,17 +262,14 @@ select {
   font-size: 10px;
 }
 
-/* ---------------------------------------------------------------------------
-   Shared window chrome (words / settings)
---------------------------------------------------------------------------- */
+/* 词表窗口和设置窗口共用的窗口外观 */
 .window-root {
   width: 100%;
   height: 100%;
 }
 
-/* Frost + colour come from the native macOS vibrancy material; keep only a
-   light translucent wash so content stays readable while the desktop shows
-   through, like Control Center. Non-mac windows get a solid surface below. */
+/* macOS 原生模糊材质提供背景效果和颜色。此处仅增加浅色半透明覆盖层，以保证内容
+   可读。非 macOS 窗口通过下方规则使用不透明背景。 */
 #app.window-root {
   background: var(--wash);
 }
@@ -311,9 +301,7 @@ body[data-view="menu"] #app {
   cursor: default;
 }
 
-/* ---------------------------------------------------------------------------
-   Words window
---------------------------------------------------------------------------- */
+/* 词表窗口 */
 .words-window {
   display: grid;
   grid-template-rows: auto auto 1fr auto;
@@ -434,9 +422,7 @@ body[data-view="menu"] #app {
   color: var(--text-3);
 }
 
-/* ---------------------------------------------------------------------------
-   Settings window
---------------------------------------------------------------------------- */
+/* 设置窗口 */
 .settings-window {
   display: flex;
   flex-direction: column;
@@ -545,7 +531,7 @@ body[data-view="menu"] #app {
   align-items: center;
 }
 
-/* macOS pop-up button: accent square with white up/down chevrons. */
+/* macOS 弹出式按钮使用主题色方块和白色上下箭头。 */
 .select-wrap::after {
   content: "";
   position: absolute;
@@ -632,17 +618,15 @@ kbd {
   opacity: 0.6;
 }
 
-/* ---------------------------------------------------------------------------
-   Tray menu popup
---------------------------------------------------------------------------- */
+/* 系统托盘菜单浮窗 */
 .menu-root {
   width: 100%;
   height: 100%;
   padding: 0;
 }
 
-/* Frost comes from the native `menu`/`blur` window effect on macOS; the CSS
-   wash only tunes contrast. Non-mac gets a solid raised surface below. */
+/* macOS 的 `menu` 或 `blur` 原生窗口效果提供模糊背景，CSS 覆盖层只用于调整对比度。
+   非 macOS 平台通过下方规则使用凸起的不透明表面。 */
 .tray-menu {
   width: 228px;
   height: 166px;
@@ -735,12 +719,8 @@ kbd {
   color: rgba(255, 255, 255, 0.75);
 }
 
-/* ---------------------------------------------------------------------------
-   Non-mac (Windows / Linux) adaptations. There is no native vibrancy, rounded
-   window corners, or overlay titlebar there, so windows paint solid surfaces,
-   floating panels draw their own radius + border, and the fake macOS titlebar
-   is dropped in favour of the real system one.
---------------------------------------------------------------------------- */
+/* Windows 和 Linux 不提供原生模糊材质、窗口圆角或覆盖式标题栏，因此窗口使用不透明
+   背景，浮动面板自行绘制圆角和边框，并使用系统标题栏。 */
 body:not(.is-macos) #app.window-root {
   background: var(--surface);
 }
@@ -772,8 +752,8 @@ body:not(.is-macos) .tray-menu {
   background: var(--surface-raised);
 }
 
-/* Slim overlay-style scrollbars for the resizable windows (mac already has
-   overlay scrollbars; this mainly tames the chunky Windows/Linux defaults). */
+/* 可调整大小的窗口使用窄型覆盖式滚动条。macOS 已提供覆盖式滚动条，此规则主要用于
+   缩小 Windows 和 Linux 的默认滚动条。 */
 .word-rows::-webkit-scrollbar,
 .settings-body::-webkit-scrollbar {
   width: 10px;

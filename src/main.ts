@@ -82,21 +82,35 @@ document.body.classList.add(`is-${os}`);
 const view = new URLSearchParams(window.location.search).get("view") ?? "words";
 document.body.dataset.view = view;
 
+type FrontendLogLevel = "debug" | "info" | "error";
+
+function frontendLog(level: FrontendLogLevel, event: string) {
+  void invoke("report_frontend_event", { level, event }).catch(() => undefined);
+}
+
+window.addEventListener("error", () => {
+  frontendLog("error", "frontend.unhandled_error");
+});
+window.addEventListener("unhandledrejection", () => {
+  frontendLog("error", "frontend.unhandled_rejection");
+});
+
 switch (view) {
   case "float":
     mountFloat(app);
     break;
   case "settings":
-    mountSettings(app);
+    void mountSettings(app).catch(() => frontendLog("error", "frontend.render_failed"));
     break;
   case "menu":
     mountMenu(app);
     break;
   case "words":
   default:
-    mountWords(app);
+    void mountWords(app).catch(() => frontendLog("error", "frontend.render_failed"));
     break;
 }
+frontendLog("info", "frontend.initialized");
 
 function mountFloat(root: HTMLElement) {
   root.className = "float-root";
@@ -108,9 +122,9 @@ function mountFloat(root: HTMLElement) {
     renderFloat(container, payload);
   };
 
-  listen<FloatPayload>("float-updated", (event) => {
+  void listen<FloatPayload>("float-updated", (event) => {
     renderFloat(container, event.payload);
-  });
+  }).catch(() => frontendLog("error", "frontend.event_listener_failed"));
 
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
@@ -118,7 +132,7 @@ function mountFloat(root: HTMLElement) {
     }
   });
 
-  load();
+  void load().catch(() => frontendLog("error", "frontend.render_failed"));
 }
 
 function renderFloat(container: HTMLElement, payload: FloatPayload) {
@@ -141,7 +155,7 @@ function renderFloat(container: HTMLElement, payload: FloatPayload) {
 
   if (payload.state === "error") {
     const message = payload.error ?? "翻译失败,请检查网络或 API 设置。";
-    // A missing API key can't be fixed by retrying — send the user to Settings.
+    // 缺少 API Key 时，重试无法解决问题，因此应引导用户打开设置。
     const needsSettings = message.includes("API Key");
     const hint = needsSettings ? "点按前往设置" : "未记录 · 点按重试";
     container.innerHTML = `
@@ -209,10 +223,9 @@ function fitFloatWindow(container: HTMLElement) {
       return;
     }
 
-    // Width is fixed by the backend per state; only refine the height. The card
-    // is capped at the window height with the overflow inside `.float-scroll`,
-    // so ask for the card's visible height plus whatever the scroll area hides.
-    // The backend clamps the result; anything beyond the clamp stays scrollable.
+    // 后端根据状态确定宽度，前端只需调整高度。卡片高度受窗口限制，超出部分位于
+    // `.float-scroll` 中，因此请求高度应包含卡片可见高度和滚动区域隐藏的高度。
+    // 后端会限制最终高度，超过限制的内容仍可滚动查看。
     let height = card.getBoundingClientRect().height;
     const scroll = card.querySelector<HTMLElement>(".float-scroll");
     if (scroll) {
@@ -246,9 +259,9 @@ async function mountWords(root: HTMLElement) {
   rows.addEventListener("keydown", handleWordRemoveKeydown);
 
   await refreshWords();
-  listen("words-updated", () => {
-    refreshWords();
-  });
+  void listen("words-updated", () => {
+    void refreshWords().catch(() => frontendLog("error", "frontend.render_failed"));
+  }).catch(() => frontendLog("error", "frontend.event_listener_failed"));
 }
 
 function closestWordRemoveButton(target: EventTarget | null) {
@@ -289,6 +302,7 @@ async function handleWordRemove(event: Event) {
     const payload = await command<WordListPayload>("remove_word", { word });
     renderWords(payload);
   } catch (error) {
+    frontendLog("error", "frontend.render_failed");
     button.disabled = false;
     query<HTMLElement>("#words-stat").textContent = `移除失败：${String(error)}`;
   }
@@ -384,8 +398,8 @@ async function mountSettings(root: HTMLElement) {
   const modelInput = query<HTMLInputElement>("#model");
   const langSelect = query<HTMLSelectElement>("#target-lang");
 
-  // Re-read persisted settings and clear any transient state so reopening the
-  // window never shows a stale "保存失败" or half-edited form.
+  // 每次打开窗口时重新读取持久化设置并清除临时状态，避免显示上次保存失败的提示
+  // 或尚未提交的表单内容。
   const load = async () => {
     const settings = await command<SettingsPayload>("get_settings");
     apiInput.value = "";
@@ -413,20 +427,20 @@ async function mountSettings(root: HTMLElement) {
           targetLang: langSelect.value,
         },
       });
-      // Close the window so clicking 完成 gives an obvious result; the form is
-      // reset by `load()` the next time it opens.
+      // 完成保存后关闭窗口，以提供明确的操作反馈。下次打开时，`load()` 会重置表单。
       doneButton.textContent = "完成";
       doneButton.disabled = false;
       await command("hide_settings");
     } catch (error) {
+      frontendLog("error", "frontend.render_failed");
       doneButton.textContent = "保存失败，重试";
       doneButton.disabled = false;
     }
   });
 
-  listen("settings-refresh", () => {
-    load();
-  });
+  void listen("settings-refresh", () => {
+    void load().catch(() => frontendLog("error", "frontend.render_failed"));
+  }).catch(() => frontendLog("error", "frontend.event_listener_failed"));
 
   await load();
 }
@@ -463,7 +477,7 @@ function mountMenu(root: HTMLElement) {
   query("#open-settings").addEventListener("click", () => command("show_settings"));
   query("#quit").addEventListener("click", () => command("quit_app"));
 
-  // Make the displayed shortcuts real while the menu has focus.
+  // 菜单获得焦点时，使界面中显示的快捷键可以执行相应操作。
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       command("hide_menu");
@@ -488,10 +502,17 @@ function mountMenu(root: HTMLElement) {
 
 async function command<T>(name: string, args?: Record<string, unknown>): Promise<T> {
   try {
-    return await invoke<T>(name, args);
+    const result = await invoke<T>(name, args);
+    if (name !== "report_frontend_event") {
+      frontendLog("debug", "frontend.command_completed");
+    }
+    return result;
   } catch (error) {
     if (isMissingTauriBridge(error)) {
       return mockCommand<T>(name, args);
+    }
+    if (name !== "report_frontend_event") {
+      frontendLog("error", "frontend.command_failed");
     }
     throw error;
   }
